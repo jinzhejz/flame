@@ -16,11 +16,13 @@ import logging
 import os
 import shutil
 import tarfile
+from abc import ABC, abstractmethod
 from concurrent.futures import Future, as_completed
 from typing import Any, Callable, List, Optional
 from urllib.parse import urlparse
 
 import cloudpickle
+import requests
 
 from flamepy.core import ObjectRef, get_object, put_object
 from flamepy.core.client import create_session, get_application, register_application, unregister_application
@@ -37,6 +39,207 @@ from flamepy.rl.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class StorageBackend(ABC):
+    """Abstract base class for storage backends.
+
+    This interface provides a unified way to upload and delete packages
+    from different storage systems (file, HTTP, etc.).
+    """
+
+    @abstractmethod
+    def upload(self, local_path: str, filename: str) -> str:
+        """Upload a package file to storage.
+
+        Args:
+            local_path: Path to the local package file
+            filename: Name of the file in storage
+
+        Returns:
+            The full URL/path to the uploaded package
+
+        Raises:
+            FlameError: If upload fails
+        """
+        pass
+
+    @abstractmethod
+    def delete(self, filename: str) -> None:
+        """Delete a package file from storage.
+
+        Args:
+            filename: Name of the file to delete
+
+        Note:
+            This method should not raise exceptions for non-existent files,
+            as cleanup operations should be idempotent.
+        """
+        pass
+
+
+class FileStorage(StorageBackend):
+    """File-based storage backend using local filesystem."""
+
+    def __init__(self, storage_base: str):
+        """Initialize file storage backend.
+
+        Args:
+            storage_base: Base storage URL (e.g., "file:///path/to/storage")
+
+        Raises:
+            FlameError: If storage directory doesn't exist
+        """
+        parsed_url = urlparse(storage_base)
+        if parsed_url.scheme != "file":
+            raise FlameError(FlameErrorCode.INVALID_CONFIG, f"Invalid file storage URL: {storage_base}")
+
+        self._storage_dir = parsed_url.path
+
+        # Ensure the storage directory exists
+        if not os.path.exists(self._storage_dir):
+            raise FlameError(FlameErrorCode.INVALID_CONFIG, f"Storage directory does not exist: {self._storage_dir}")
+
+    def upload(self, local_path: str, filename: str) -> str:
+        """Upload a package file to local filesystem storage.
+
+        Args:
+            local_path: Path to the local package file
+            filename: Name of the file in storage
+
+        Returns:
+            The full file:// URL to the uploaded package
+
+        Raises:
+            FlameError: If upload fails
+        """
+        dest_path = os.path.join(self._storage_dir, filename)
+
+        # Check if package already exists
+        if os.path.exists(dest_path):
+            logger.debug(f"Package already exists at {dest_path}, skipping upload")
+        else:
+            try:
+                shutil.copy2(local_path, dest_path)
+                logger.debug(f"Copied package to {dest_path}")
+            except Exception as e:
+                raise FlameError(FlameErrorCode.INTERNAL, f"Failed to copy package to storage: {str(e)}")
+
+        # Return the full URL
+        return f"file://{dest_path}"
+
+    def delete(self, filename: str) -> None:
+        """Delete a package file from local filesystem storage.
+
+        Args:
+            filename: Name of the file to delete
+        """
+        dest_path = os.path.join(self._storage_dir, filename)
+
+        if os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+                logger.debug(f"Removed package from storage: {dest_path}")
+            except Exception as e:
+                logger.error(f"Error removing package from storage: {e}", exc_info=True)
+
+
+class HttpStorage(StorageBackend):
+    """HTTP-based storage backend using HTTP/HTTPS."""
+
+    def __init__(self, storage_base: str, upload_timeout: int = 300, delete_timeout: int = 60):
+        """Initialize HTTP storage backend.
+
+        Args:
+            storage_base: Base storage URL (e.g., "http://storage.example.com/packages/")
+            upload_timeout: Timeout in seconds for upload operations (default: 300)
+            delete_timeout: Timeout in seconds for delete operations (default: 60)
+        """
+        parsed_url = urlparse(storage_base)
+        if parsed_url.scheme not in ("http", "https"):
+            raise FlameError(FlameErrorCode.INVALID_CONFIG, f"Invalid HTTP storage URL: {storage_base}")
+
+        # Ensure storage_base ends with '/' for consistent URL construction
+        self._storage_base = storage_base.rstrip("/") + "/"
+        self._upload_timeout = upload_timeout
+        self._delete_timeout = delete_timeout
+
+    def upload(self, local_path: str, filename: str) -> str:
+        """Upload a package file to HTTP storage.
+
+        Args:
+            local_path: Path to the local package file
+            filename: Name of the file in storage
+
+        Returns:
+            The full HTTP/HTTPS URL to the uploaded package
+
+        Raises:
+            FlameError: If upload fails
+        """
+        upload_url = f"{self._storage_base}{filename}"
+
+        try:
+            # Read the package file
+            with open(local_path, "rb") as f:
+                file_data = f.read()
+
+            # Upload via PUT request
+            response = requests.put(upload_url, data=file_data, timeout=self._upload_timeout)
+
+            # Check if upload was successful
+            if response.status_code in (200, 201, 204):
+                logger.debug(f"Uploaded package to {upload_url}")
+                return upload_url
+            else:
+                raise FlameError(
+                    FlameErrorCode.INTERNAL,
+                    f"Failed to upload package to {upload_url}: HTTP {response.status_code} - {response.text}",
+                )
+        except requests.exceptions.RequestException as e:
+            raise FlameError(FlameErrorCode.INTERNAL, f"Failed to upload package to HTTP storage: {str(e)}")
+
+    def delete(self, filename: str) -> None:
+        """Delete a package file from HTTP storage.
+
+        Args:
+            filename: Name of the file to delete
+        """
+        delete_url = f"{self._storage_base}{filename}"
+
+        try:
+            response = requests.delete(delete_url, timeout=self._delete_timeout)
+            if response.status_code in (200, 204, 404):
+                logger.debug(f"Removed package from storage: {delete_url}")
+            else:
+                logger.warning(f"Failed to delete package from {delete_url}: HTTP {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Error deleting package from HTTP storage: {e}")
+
+
+def create_storage_backend(storage_base: str) -> StorageBackend:
+    """Create a storage backend instance based on the storage URL scheme.
+
+    Args:
+        storage_base: Storage base URL (e.g., "file:///path" or "http://host/path")
+
+    Returns:
+        StorageBackend instance
+
+    Raises:
+        FlameError: If the storage scheme is not supported
+    """
+    parsed_url = urlparse(storage_base)
+
+    if parsed_url.scheme == "file":
+        return FileStorage(storage_base)
+    elif parsed_url.scheme in ("http", "https"):
+        return HttpStorage(storage_base)
+    else:
+        raise FlameError(
+            FlameErrorCode.INVALID_CONFIG,
+            f"Unsupported storage scheme: {parsed_url.scheme}. Supported schemes: file://, http://, https://",
+        )
 
 
 class ObjectFuture:
@@ -293,6 +496,7 @@ class Runner:
         _services: List of RunnerService instances created within this context
         _package_path: Path to the created package file
         _app_registered: Whether the application was successfully registered
+        _storage_backend: Storage backend instance for uploading/deleting packages
     """
 
     def __init__(self, name: str):
@@ -306,6 +510,7 @@ class Runner:
         self._package_path: Optional[str] = None
         self._app_registered = False
         self._context = FlameContext()
+        self._storage_backend: Optional[StorageBackend] = None
 
         logger.debug(f"Initialized Runner '{name}'")
 
@@ -329,6 +534,11 @@ class Runner:
         # Check that package configuration is available
         if self._context.package is None:
             raise FlameError(FlameErrorCode.INVALID_CONFIG, "Package configuration is not set in FlameContext. Please configure the 'package' field in your flame.yaml.")
+
+        # Initialize storage backend
+        storage_base = self._context.package.storage
+        self._storage_backend = create_storage_backend(storage_base)
+        logger.debug(f"Initialized storage backend: {type(self._storage_backend).__name__}")
 
         # Step 1: Package the current working directory
         self._package_path = self._create_package()
@@ -585,6 +795,8 @@ class Runner:
     def _upload_package(self) -> str:
         """Upload the package to the storage location.
 
+        Uses the configured storage backend to upload the package.
+
         Returns:
             The full URL to the uploaded package
 
@@ -594,53 +806,19 @@ class Runner:
         if not self._package_path:
             raise FlameError(FlameErrorCode.INVALID_STATE, "Package path is not set")
 
-        storage_base = self._context.package.storage
+        if not self._storage_backend:
+            raise FlameError(FlameErrorCode.INVALID_STATE, "Storage backend is not initialized")
 
-        # Parse the storage URL
-        parsed_url = urlparse(storage_base)
-
-        if parsed_url.scheme != "file":
-            raise FlameError(FlameErrorCode.INVALID_CONFIG, f"Unsupported storage scheme: {parsed_url.scheme}. Only file:// is supported.")
-
-        # Get the storage directory path
-        storage_dir = parsed_url.path
-
-        # Ensure the storage directory exists
-        if not os.path.exists(storage_dir):
-            raise FlameError(FlameErrorCode.INVALID_CONFIG, f"Storage directory does not exist: {storage_dir}")
-
-        # Copy the package to storage
-        dest_path = os.path.join(storage_dir, os.path.basename(self._package_path))
-
-        # Check if package already exists
-        if os.path.exists(dest_path):
-            logger.debug(f"Package already exists at {dest_path}, skipping upload")
-        else:
-            try:
-                shutil.copy2(self._package_path, dest_path)
-                logger.debug(f"Copied package to {dest_path}")
-            except Exception as e:
-                raise FlameError(FlameErrorCode.INTERNAL, f"Failed to copy package to storage: {str(e)}")
-
-        # Return the full URL
-        return f"file://{dest_path}"
+        package_filename = os.path.basename(self._package_path)
+        return self._storage_backend.upload(self._package_path, package_filename)
 
     def _cleanup_storage(self) -> None:
         """Delete the package from storage."""
-        if not self._package_path:
+        if not self._package_path or not self._storage_backend:
             return
 
         try:
-            storage_base = self._context.package.storage
-            parsed_url = urlparse(storage_base)
-
-            if parsed_url.scheme == "file":
-                storage_dir = parsed_url.path
-                dest_path = os.path.join(storage_dir, os.path.basename(self._package_path))
-
-                if os.path.exists(dest_path):
-                    os.remove(dest_path)
-                    logger.debug(f"Removed package from storage: {dest_path}")
-
+            package_filename = os.path.basename(self._package_path)
+            self._storage_backend.delete(package_filename)
         except Exception as e:
             logger.error(f"Error cleaning up storage: {e}", exc_info=True)
