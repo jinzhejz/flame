@@ -6,7 +6,7 @@ clusters:
     cache:
       endpoint: "grpc://flame-executor-manager:9090"
     package:
-      storage: "file:///opt/flame/packages"
+      storage: "http://192.168.249.128/files/"
       excludes:
         - "*.log"
         - "*.pkl"
