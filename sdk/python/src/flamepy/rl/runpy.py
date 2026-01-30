@@ -185,53 +185,113 @@ class FlameRunpyService(FlameService):
         """
         Install a package from a URL.
 
-        Supports file:// URLs pointing to either directories or package files (archives).
+        Supports file://, http://, and https:// URLs pointing to either directories or package files (archives).
         If the URL points to an archive file (.tar.gz, .zip, etc.), it will be extracted
         to the working directory first, then installed from the extracted directory.
+        For HTTP/HTTPS URLs, the file will be downloaded first if needed.
 
         Args:
-            url: The package URL (e.g., file:///opt/my-package.tar.gz or file:///opt/my-package)
+            url: The package URL (e.g., file:///opt/my-package.tar.gz, http://example.com/my-package.zip, or https://example.com/my-package)
 
         Raises:
-            FileNotFoundError: If the package path does not exist
+            FileNotFoundError: If the package path does not exist (for file:// URLs)
             RuntimeError: If package installation fails
         """
 
         logger.info(f"Installing package from URL: {url}")
 
-        # Parse the URL to extract the path
-        parsed_url = urlparse(url)
+        # Track temporary files that need cleanup
+        temp_file_to_cleanup = None
 
-        # Currently only support file:// scheme
-        if parsed_url.scheme != "file":
-            logger.warning(f"Unsupported URL scheme: {parsed_url.scheme}, skipping package installation")
+        # Parse the URL to extract the scheme and path
+        parsed_url = urlparse(url)
+        scheme = parsed_url.scheme.lower()
+
+        # Support file://, http://, and https:// schemes
+        if scheme not in ("file", "http", "https"):
+            logger.warning(f"Unsupported URL scheme: {scheme}, skipping package installation")
             return
 
-        package_path = parsed_url.path
-        logger.info(f"Package path: {package_path}")
+        # Handle HTTP/HTTPS URLs
+        if scheme in ("http", "https"):
+            logger.info(f"Downloading package from HTTP/HTTPS URL: {url}")
+            
+            # Check if URL points to an archive file based on the path
+            url_path = parsed_url.path
+            is_archive = self._is_archive(url_path)
+            
+            if is_archive:
+                # For archive files, use _extract_archive which now supports HTTP URLs
+                logger.info("Package URL points to an archive file, extracting...")
+                working_dir = os.getcwd()
+                # Extract basename from URL path, fallback to a default name
+                basename = os.path.basename(url_path) or "package"
+                extract_dir = os.path.join(working_dir, f"extracted_{basename.split('.')[0]}")
+                
+                # Extract the archive (this will download and extract)
+                extracted_dir = self._extract_archive(url, extract_dir)
+                
+                # Use the extracted directory for installation
+                install_path = extracted_dir
+                logger.info(f"Will install from extracted directory: {install_path}")
+            else:
+                # For non-archive files (e.g., .whl, single-file packages), 
+                # download to temporary location and install directly
+                # pip can handle various formats like .whl, .tar.gz, etc.
+                logger.info("Package URL points to a non-archive file, downloading...")
+                temp_fd, temp_file = tempfile.mkstemp(suffix=os.path.splitext(url_path)[1] or "")
+                os.close(temp_fd)
+                temp_file_to_cleanup = temp_file
+                
+                try:
+                    urlretrieve(url, temp_file)
+                    logger.info(f"Downloaded package to temporary file: {temp_file}")
+                    
+                    # Verify the downloaded file is not empty
+                    if os.path.getsize(temp_file) == 0:
+                        raise RuntimeError(f"Downloaded file is empty: {url}")
+                    
+                    # Use the downloaded file for installation (pip can handle .whl, .tar.gz, etc.)
+                    install_path = temp_file
+                    logger.info(f"Will install from downloaded file: {install_path}")
+                except Exception as e:
+                    # Clean up on error
+                    if os.path.exists(temp_file):
+                        try:
+                            os.remove(temp_file)
+                        except Exception:
+                            pass
+                    temp_file_to_cleanup = None
+                    logger.error(f"Failed to download package from URL: {e}", exc_info=True)
+                    raise RuntimeError(f"Failed to download package from URL {url}: {e}")
+        
+        # Handle file:// URLs (existing logic)
+        else:  # scheme == "file"
+            package_path = parsed_url.path
+            logger.info(f"Package path: {package_path}")
 
-        # Check if the path exists
-        if not os.path.exists(package_path):
-            logger.error(f"Package path does not exist: {package_path}")
-            raise FileNotFoundError(f"Package path not found: {package_path}")
+            # Check if the path exists
+            if not os.path.exists(package_path):
+                logger.error(f"Package path does not exist: {package_path}")
+                raise FileNotFoundError(f"Package path not found: {package_path}")
 
-        # If it's an archive file, extract it first
-        install_path = package_path
-        extracted_dir = None
+            # If it's an archive file, extract it first
+            install_path = package_path
+            extracted_dir = None
 
-        if os.path.isfile(package_path) and self._is_archive(package_path):
-            logger.info("Package is an archive file, extracting...")
+            if os.path.isfile(package_path) and self._is_archive(package_path):
+                logger.info("Package is an archive file, extracting...")
 
-            # Get the working directory (default to /tmp if not set)
-            working_dir = os.getcwd()
-            extract_dir = os.path.join(working_dir, f"extracted_{os.path.basename(package_path).split('.')[0]}")
+                # Get the working directory (default to /tmp if not set)
+                working_dir = os.getcwd()
+                extract_dir = os.path.join(working_dir, f"extracted_{os.path.basename(package_path).split('.')[0]}")
 
-            # Extract the archive
-            extracted_dir = self._extract_archive(package_path, extract_dir)
+                # Extract the archive
+                extracted_dir = self._extract_archive(package_path, extract_dir)
 
-            # Use the extracted directory for installation
-            install_path = extracted_dir
-            logger.info(f"Will install from extracted directory: {install_path}")
+                # Use the extracted directory for installation
+                install_path = extracted_dir
+                logger.info(f"Will install from extracted directory: {install_path}")
 
         # Use sys.executable -m pip to install into the current virtual environment
         # pip install will upgrade the package if it's already installed
@@ -292,6 +352,14 @@ class FlameRunpyService(FlameService):
 
             raise RuntimeError(f"Package installation failed: {e}. Check log at {log_file_path}")
         finally:
+            # Clean up temporary file if it was downloaded
+            if temp_file_to_cleanup and os.path.exists(temp_file_to_cleanup):
+                try:
+                    os.remove(temp_file_to_cleanup)
+                    logger.debug(f"Removed temporary download file: {temp_file_to_cleanup}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to remove temporary file {temp_file_to_cleanup}: {cleanup_error}")
+            
             # Read and log the installation output from the log file
             try:
                 if logger.isEnabledFor(logging.DEBUG):
