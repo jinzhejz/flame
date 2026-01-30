@@ -20,9 +20,11 @@ import site
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 from typing import Any, Optional
 from urllib.parse import urlparse
+from urllib.request import urlretrieve
 
 import cloudpickle
 
@@ -107,9 +109,12 @@ class FlameRunpyService(FlameService):
     def _extract_archive(self, archive_path: str, extract_to: str) -> str:
         """
         Extract an archive to a directory.
+        
+        Supports both local file paths and HTTP/HTTPS URLs. If archive_path is a URL,
+        the file will be downloaded to a temporary location first, then extracted.
 
         Args:
-            archive_path: Path to the archive file
+            archive_path: Path to the archive file or HTTP/HTTPS URL
             extract_to: Directory to extract to
 
         Returns:
@@ -120,7 +125,28 @@ class FlameRunpyService(FlameService):
         """
         logger.info(f"Extracting archive: {archive_path} to {extract_to}")
 
+        # Check if archive_path is a URL
+        parsed_url = urlparse(archive_path)
+        is_url = parsed_url.scheme in ("http", "https")
+        local_archive_path = archive_path
+        temp_file = None
+
         try:
+            # If it's a URL, download the file first
+            if is_url:
+                logger.info(f"Downloading archive from URL: {archive_path}")
+                # Create a temporary file to store the downloaded archive
+                temp_fd, temp_file = tempfile.mkstemp(suffix=os.path.splitext(parsed_url.path)[1] or ".zip")
+                os.close(temp_fd)
+                
+                try:
+                    urlretrieve(archive_path, temp_file)
+                    logger.info(f"Downloaded archive to temporary file: {temp_file}")
+                    local_archive_path = temp_file
+                except Exception as e:
+                    logger.error(f"Failed to download archive from URL: {e}", exc_info=True)
+                    raise RuntimeError(f"Failed to download archive from URL {archive_path}: {e}")
+
             # Remove old extracted directory if it exists to ensure clean extraction
             if os.path.exists(extract_to):
                 logger.info(f"Removing existing extracted directory: {extract_to}")
@@ -130,22 +156,30 @@ class FlameRunpyService(FlameService):
             os.makedirs(extract_to, exist_ok=True)
 
             # Determine archive type and extract
-            if archive_path.endswith(".zip"):
-                with zipfile.ZipFile(archive_path, "r") as zip_ref:
+            if local_archive_path.endswith(".zip"):
+                with zipfile.ZipFile(local_archive_path, "r") as zip_ref:
                     zip_ref.extractall(extract_to)
                 logger.info(f"Extracted zip archive to {extract_to}")
-            elif any(archive_path.endswith(ext) for ext in [".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar"]):
-                with tarfile.open(archive_path, "r:*") as tar_ref:
+            elif any(local_archive_path.endswith(ext) for ext in [".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar"]):
+                with tarfile.open(local_archive_path, "r:*") as tar_ref:
                     tar_ref.extractall(extract_to)
                 logger.info(f"Extracted tar archive to {extract_to}")
             else:
-                raise RuntimeError(f"Unsupported archive format: {archive_path}")
+                raise RuntimeError(f"Unsupported archive format: {local_archive_path}")
 
             return extract_to
 
         except Exception as e:
             logger.error(f"Failed to extract archive: {e}", exc_info=True)
             raise RuntimeError(f"Archive extraction failed: {e}")
+        finally:
+            # Clean up temporary file if it was downloaded
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                    logger.debug(f"Removed temporary download file: {temp_file}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to remove temporary file {temp_file}: {cleanup_error}")
 
     def _install_package_from_url(self, url: str) -> None:
         """
