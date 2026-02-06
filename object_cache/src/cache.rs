@@ -164,6 +164,7 @@ impl ObjectCache {
 
     fn load_session_objects(
         &self,
+        application_id: &str,
         session_path: &Path,
         objects: &mut HashMap<String, ObjectMetadata>,
     ) -> Result<(), FlameError> {
@@ -187,7 +188,7 @@ impl ObjectCache {
                 .and_then(|n| n.to_str())
                 .ok_or_else(|| FlameError::Internal("Invalid object file name".to_string()))?;
 
-            let key = format!("{}/{}", session_id, object_id);
+            let key = format!("{}/{}/{}", application_id, session_id, object_id);
             let size = fs::metadata(&object_path)?.len();
             let metadata = self.create_metadata(key.clone(), size);
 
@@ -208,15 +209,31 @@ impl ObjectCache {
         tracing::info!("Loading objects from disk: {:?}", storage_path);
         let mut objects = lock_ptr!(self.objects)?;
 
-        for session_entry in fs::read_dir(storage_path)? {
-            let session_entry = session_entry?;
-            let session_path = session_entry.path();
+        // Iterate over application directories
+        for application_entry in fs::read_dir(storage_path)? {
+            let application_entry = application_entry?;
+            let application_path = application_entry.path();
 
-            if !session_path.is_dir() {
+            if !application_path.is_dir() {
                 continue;
             }
 
-            self.load_session_objects(&session_path, &mut objects)?;
+            let application_id = application_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| FlameError::Internal("Invalid application directory name".to_string()))?;
+
+            // Iterate over session directories within application directory
+            for session_entry in fs::read_dir(&application_path)? {
+                let session_entry = session_entry?;
+                let session_path = session_entry.path();
+
+                if !session_path.is_dir() {
+                    continue;
+                }
+
+                self.load_session_objects(application_id, &session_path, &mut objects)?;
+            }
         }
 
         tracing::info!("Loaded {} objects from disk", objects.len());
@@ -225,25 +242,28 @@ impl ObjectCache {
 
     async fn put(
         &self,
+        application_id: String,
         session_id: SessionID,
         object: Object,
     ) -> Result<ObjectMetadata, FlameError> {
-        self.put_with_id(session_id, None, object).await
+        self.put_with_id(application_id, session_id, None, object).await
     }
 
     async fn put_with_id(
         &self,
+        application_id: String,
         session_id: SessionID,
         object_id: Option<String>,
         object: Object,
     ) -> Result<ObjectMetadata, FlameError> {
         let object_id = object_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let key = format!("{}/{}", session_id, object_id);
+        let key = format!("{}/{}/{}", application_id, session_id, object_id);
 
         // Write to disk if storage is configured
         if let Some(storage_path) = &self.storage_path {
-            // Create session directory
-            let session_dir = storage_path.join(&session_id);
+            // Create application/session directory structure
+            let application_dir = storage_path.join(&application_id);
+            let session_dir = application_dir.join(&session_id);
             fs::create_dir_all(&session_dir)?;
 
             // Write object to Arrow IPC file
@@ -272,7 +292,24 @@ impl ObjectCache {
             .as_ref()
             .ok_or_else(|| FlameError::InvalidConfig("Storage path not configured".to_string()))?;
 
-        let object_path = storage_path.join(format!("{}.arrow", key));
+        // Parse key: application_id/session_id/object_id
+        let parts: Vec<&str> = key.split('/').collect();
+        if parts.len() != 3 {
+            return Err(FlameError::InvalidConfig(format!(
+                "Invalid key format (expected application_id/session_id/object_id): {}",
+                key
+            )));
+        }
+
+        let application_id = parts[0];
+        let session_id = parts[1];
+        let object_id = parts[2];
+
+        // Build path: storage_path/application_id/session_id/object_id.arrow
+        let object_path = storage_path
+            .join(application_id)
+            .join(session_id)
+            .join(format!("{}.arrow", object_id));
 
         let file = fs::File::open(&object_path)
             .map_err(|e| FlameError::NotFound(format!("Object file not found: {}", e)))?;
@@ -297,7 +334,22 @@ impl ObjectCache {
             None => return Ok(None),
         };
 
-        let object_path = storage_path.join(format!("{}.arrow", key));
+        // Parse key: application_id/session_id/object_id
+        let parts: Vec<&str> = key.split('/').collect();
+        if parts.len() != 3 {
+            return Ok(None);
+        }
+
+        let application_id = parts[0];
+        let session_id = parts[1];
+        let object_id = parts[2];
+
+        // Build path: storage_path/application_id/session_id/object_id.arrow
+        let object_path = storage_path
+            .join(application_id)
+            .join(session_id)
+            .join(format!("{}.arrow", object_id));
+
         if !object_path.exists() {
             return Ok(None);
         }
@@ -335,21 +387,24 @@ impl ObjectCache {
     }
 
     async fn update(&self, key: String, new_object: Object) -> Result<ObjectMetadata, FlameError> {
-        // For now, update is the same as put (overwrites the file)
-        // Parse key to get session_id
+        // Parse key: application_id/session_id/object_id
         let parts: Vec<&str> = key.split('/').collect();
-        if parts.len() != 2 {
+        if parts.len() != 3 {
             return Err(FlameError::InvalidConfig(format!(
-                "Invalid key format: {}",
+                "Invalid key format (expected application_id/session_id/object_id): {}",
                 key
             )));
         }
-        let _session_id = parts[0].to_string();
-        let _object_id = parts[1].to_string();
+        let application_id = parts[0];
+        let session_id = parts[1];
+        let object_id = parts[2];
 
         // Write to disk if storage is configured
         if let Some(storage_path) = &self.storage_path {
-            let object_path = storage_path.join(format!("{}.arrow", key));
+            let object_path = storage_path
+                .join(application_id)
+                .join(session_id)
+                .join(format!("{}.arrow", object_id));
             let batch = object_to_batch(&new_object)
                 .map_err(|e| FlameError::Internal(format!("Failed to create batch: {}", e)))?;
 
@@ -368,10 +423,10 @@ impl ObjectCache {
         Ok(metadata)
     }
 
-    async fn delete(&self, session_id: SessionID) -> Result<(), FlameError> {
+    async fn delete(&self, application_id: String, session_id: SessionID) -> Result<(), FlameError> {
         // Delete session directory and all objects
         if let Some(storage_path) = &self.storage_path {
-            let session_dir = storage_path.join(&session_id);
+            let session_dir = storage_path.join(&application_id).join(&session_id);
             if session_dir.exists() {
                 fs::remove_dir_all(&session_dir)?;
                 tracing::debug!("Deleted session directory: {:?}", session_dir);
@@ -380,9 +435,10 @@ impl ObjectCache {
 
         // Remove from in-memory index
         let mut objects = lock_ptr!(self.objects)?;
-        objects.retain(|key, _| !key.starts_with(&format!("{}/", session_id)));
+        let prefix = format!("{}/{}/", application_id, session_id);
+        objects.retain(|key, _| !key.starts_with(&prefix));
 
-        tracing::debug!("Session deleted: <{}>", session_id);
+        tracing::debug!("Session deleted: <{}/{}>", application_id, session_id);
 
         Ok(())
     }
@@ -402,8 +458,9 @@ impl FlightCacheServer {
         Self { cache }
     }
 
-    fn extract_session_and_object_id(
+    fn extract_application_session_and_object_id(
         flight_data: &FlightData,
+        application_id: &mut Option<String>,
         session_id: &mut Option<String>,
         object_id: &mut Option<String>,
     ) {
@@ -416,12 +473,31 @@ impl FlightCacheServer {
                 let path_str = &desc.path[0];
                 if path_str.contains('/') {
                     let parts: Vec<&str> = path_str.split('/').collect();
-                    if parts.len() == 2 {
+                    if parts.len() == 3 {
+                        // Format: application_id/session_id/object_id
+                        *application_id = Some(parts[0].to_string());
+                        *session_id = Some(parts[1].to_string());
+                        *object_id = Some(parts[2].to_string());
+                    } else if parts.len() == 2 {
+                        // Legacy format: session_id/object_id (for backward compatibility)
                         *session_id = Some(parts[0].to_string());
                         *object_id = Some(parts[1].to_string());
                     }
                 } else {
+                    // Only session_id provided
                     *session_id = Some(path_str.clone());
+                }
+            }
+        }
+
+        // Try to extract application_id from app_metadata if not found in path
+        if application_id.is_none() && !flight_data.app_metadata.is_empty() {
+            if let Ok(metadata_str) = String::from_utf8(flight_data.app_metadata.to_vec()) {
+                for line in metadata_str.lines() {
+                    if let Some(id) = line.strip_prefix("application_id:") {
+                        *application_id = Some(id.trim().to_string());
+                        break;
+                    }
                 }
             }
         }
@@ -457,8 +533,9 @@ impl FlightCacheServer {
 
     async fn collect_batches_from_stream(
         mut stream: Streaming<FlightData>,
-    ) -> Result<(String, Option<String>, Vec<RecordBatch>), FlameError> {
+    ) -> Result<(String, String, Option<String>, Vec<RecordBatch>), FlameError> {
         let mut batches = Vec::new();
+        let mut application_id: Option<String> = None;
         let mut session_id: Option<String> = None;
         let mut object_id: Option<String> = None;
         let mut schema: Option<Arc<Schema>> = None;
@@ -468,7 +545,12 @@ impl FlightCacheServer {
             .await
             .map_err(|e| FlameError::Internal(format!("Stream error: {}", e)))?
         {
-            Self::extract_session_and_object_id(&flight_data, &mut session_id, &mut object_id);
+            Self::extract_application_session_and_object_id(
+                &flight_data,
+                &mut application_id,
+                &mut session_id,
+                &mut object_id,
+            );
 
             // Extract schema from data_header in first message
             if schema.is_none() && !flight_data.data_header.is_empty() {
@@ -488,13 +570,19 @@ impl FlightCacheServer {
             return Err(FlameError::InvalidState("No data received".to_string()));
         }
 
-        let session_id = session_id.ok_or_else(|| {
+        let application_id = application_id.ok_or_else(|| {
             FlameError::InvalidState(
-                "session_id must be provided in app_metadata as 'session_id:{id}'".to_string(),
+                "application_id must be provided in flight descriptor path or app_metadata".to_string(),
             )
         })?;
 
-        Ok((session_id, object_id, batches))
+        let session_id = session_id.ok_or_else(|| {
+            FlameError::InvalidState(
+                "session_id must be provided in flight descriptor path or app_metadata".to_string(),
+            )
+        })?;
+
+        Ok((application_id, session_id, object_id, batches))
     }
 
     fn combine_batches(batches: Vec<RecordBatch>) -> Result<RecordBatch, FlameError> {
@@ -525,17 +613,33 @@ impl FlightCacheServer {
     }
 
     async fn handle_put_action(&self, action_body: &str) -> Result<String, FlameError> {
-        let (session_id_str, data_b64) = action_body
-            .split_once(':')
-            .ok_or_else(|| FlameError::InvalidState("Invalid PUT action format".to_string()))?;
+        // Format: "application_id:session_id:data_b64" or "application_id/session_id:data_b64"
+        let parts: Vec<&str> = action_body.splitn(3, ':').collect();
+        if parts.len() < 2 {
+            return Err(FlameError::InvalidState("Invalid PUT action format".to_string()));
+        }
 
-        let session_id = session_id_str.to_string();
+        let (application_id, session_id) = if parts[0].contains('/') {
+            // Format: "application_id/session_id:data_b64"
+            let path_parts: Vec<&str> = parts[0].split('/').collect();
+            if path_parts.len() != 2 {
+                return Err(FlameError::InvalidState("Invalid PUT action format".to_string()));
+            }
+            (path_parts[0].to_string(), path_parts[1].to_string())
+        } else if parts.len() == 3 {
+            // Format: "application_id:session_id:data_b64"
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            return Err(FlameError::InvalidState("Invalid PUT action format".to_string()));
+        };
+
+        let data_b64 = parts[parts.len() - 1];
         let data = base64::engine::general_purpose::STANDARD
             .decode(data_b64)
             .map_err(|e| FlameError::InvalidState(format!("Invalid base64: {}", e)))?;
 
         let object = Object { version: 0, data };
-        let metadata = self.cache.put(session_id, object).await?;
+        let metadata = self.cache.put(application_id, session_id, object).await?;
 
         serde_json::to_string(&metadata)
             .map_err(|e| FlameError::Internal(format!("Failed to serialize: {}", e)))
@@ -558,8 +662,29 @@ impl FlightCacheServer {
             .map_err(|e| FlameError::Internal(format!("Failed to serialize: {}", e)))
     }
 
-    async fn handle_delete_action(&self, session_id: String) -> Result<String, FlameError> {
-        self.cache.delete(session_id).await?;
+    async fn handle_delete_action(&self, action_body: String) -> Result<String, FlameError> {
+        // Format: "application_id/session_id" or "application_id:session_id"
+        let (application_id, session_id) = if action_body.contains('/') {
+            let parts: Vec<&str> = action_body.split('/').collect();
+            if parts.len() != 2 {
+                return Err(FlameError::InvalidState("Invalid DELETE action format".to_string()));
+            }
+            (parts[0].to_string(), parts[1].to_string())
+        } else if action_body.contains(':') {
+            let parts: Vec<&str> = action_body.split(':').collect();
+            if parts.len() != 2 {
+                return Err(FlameError::InvalidState("Invalid DELETE action format".to_string()));
+            }
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            // Legacy format: only session_id (for backward compatibility)
+            // Try to infer application_id from existing objects
+            return Err(FlameError::InvalidState(
+                "DELETE action requires application_id/session_id format".to_string(),
+            ));
+        };
+
+        self.cache.delete(application_id, session_id).await?;
         Ok("OK".to_string())
     }
 }
@@ -727,7 +852,7 @@ impl FlightService for FlightCacheServer {
             return Err(Status::invalid_argument("Empty descriptor path"));
         };
 
-        // Key format: "session_id/object_id"
+        // Key format: "application_id/session_id/object_id"
 
         // Create endpoint with cache server's public endpoint
         let endpoint_uri = self.cache.endpoint.to_uri();
@@ -770,7 +895,7 @@ impl FlightService for FlightCacheServer {
         let key = String::from_utf8(ticket.ticket.to_vec())
             .map_err(|e| Status::invalid_argument(format!("Invalid ticket: {}", e)))?;
 
-        // Key format: "session_id/object_id"
+        // Key format: "application_id/session_id/object_id"
         let object = self.cache.get(key.clone()).await?;
 
         let batch = object_to_batch(&object)?;
@@ -796,13 +921,13 @@ impl FlightService for FlightCacheServer {
     ) -> Result<Response<Self::DoPutStream>, Status> {
         let stream = request.into_inner();
 
-        let (session_id, object_id, batches) = Self::collect_batches_from_stream(stream).await?;
+        let (application_id, session_id, object_id, batches) = Self::collect_batches_from_stream(stream).await?;
         let combined_batch = Self::combine_batches(batches)?;
         let object = batch_to_object(&combined_batch)?;
 
         let metadata = self
             .cache
-            .put_with_id(session_id, object_id, object)
+            .put_with_id(application_id, session_id, object_id, object)
             .await?;
 
         let result = Self::create_put_result(&metadata)?;
