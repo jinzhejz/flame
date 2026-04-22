@@ -21,7 +21,7 @@ cache:
   eviction:
     policy: "lru"
     max_memory: "1024M"
-    max_objects: 20000
+    max_objects: 100000
   tls:
     cert_file: "/etc/flame/certs/server.crt"
     key_file: "/etc/flame/certs/server.key"
