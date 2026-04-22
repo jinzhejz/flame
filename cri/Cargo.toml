@@ -27,3 +27,6 @@ uuid = { workspace = true }
 [build-dependencies]
 tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }
+
+[lints.clippy]
+doc_lazy_continuation = "allow"

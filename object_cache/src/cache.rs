@@ -20,7 +20,10 @@ use std::sync::Arc;
 use arrow::array::{BinaryArray, RecordBatch, UInt64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::ipc::{reader::FileReader, writer::FileWriter};
+use arrow::ipc::writer::{
+    CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
+};
+use arrow::ipc::{reader::FileReader, writer::FileWriter, CompressionType};
 use arrow_flight::{
     flight_service_server::{FlightService, FlightServiceServer},
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
@@ -408,6 +411,10 @@ impl ObjectCache {
         let reader = FileReader::try_new(file, None)
             .map_err(|e| FlameError::Internal(format!("Failed to create reader: {}", e)))?;
 
+        // SAFETY: Skip validation for trusted cache data (3-9x faster reads).
+        // This is safe because all data in the cache was written by this service.
+        let reader = unsafe { reader.with_skip_validation(true) };
+
         let batch = reader
             .into_iter()
             .next()
@@ -533,6 +540,8 @@ impl ObjectCache {
             let reader = FileReader::try_new(file, None).map_err(|e| {
                 FlameError::Internal(format!("Failed to create reader for {:?}: {}", path, e))
             })?;
+            // SAFETY: Skip validation for trusted cache data written by this service.
+            let reader = unsafe { reader.with_skip_validation(true) };
 
             let batch = reader
                 .into_iter()
@@ -1097,10 +1106,8 @@ fn batch_to_object(batch: &RecordBatch) -> Result<Object, FlameError> {
 /// Convert Object (with deltas) to FlightData stream
 /// Sends schema once, followed by base batch, then delta batches
 fn object_to_flight_data_vec(obj: &Object) -> Result<Vec<FlightData>, FlameError> {
-    use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
-
     let options = IpcWriteOptions::default()
-        .try_with_compression(None)
+        .try_with_compression(Some(CompressionType::ZSTD))
         .map_err(|e| FlameError::Internal(format!("Failed to set compression: {}", e)))?;
 
     let data_gen = IpcDataGenerator::default();
@@ -1125,7 +1132,12 @@ fn object_to_flight_data_vec(obj: &Object) -> Result<Vec<FlightData>, FlameError
     });
 
     let (encoded_dicts, encoded_batch) = data_gen
-        .encode(&base_batch, &mut dict_tracker, &options, &mut compression_ctx)
+        .encode(
+            &base_batch,
+            &mut dict_tracker,
+            &options,
+            &mut compression_ctx,
+        )
         .map_err(|e| FlameError::Internal(format!("Failed to encode base batch: {}", e)))?;
     for dict_batch in encoded_dicts {
         all_flight_data.push(dict_batch.into());
@@ -1135,7 +1147,12 @@ fn object_to_flight_data_vec(obj: &Object) -> Result<Vec<FlightData>, FlameError
     for delta in &obj.deltas {
         let delta_batch = object_to_batch(delta)?;
         let (encoded_dicts, encoded_batch) = data_gen
-            .encode(&delta_batch, &mut dict_tracker, &options, &mut compression_ctx)
+            .encode(
+                &delta_batch,
+                &mut dict_tracker,
+                &options,
+                &mut compression_ctx,
+            )
             .map_err(|e| FlameError::Internal(format!("Failed to encode delta batch: {}", e)))?;
         for dict_batch in encoded_dicts {
             all_flight_data.push(dict_batch.into());
