@@ -1097,7 +1097,7 @@ fn batch_to_object(batch: &RecordBatch) -> Result<Object, FlameError> {
 /// Convert Object (with deltas) to FlightData stream
 /// Sends schema once, followed by base batch, then delta batches
 fn object_to_flight_data_vec(obj: &Object) -> Result<Vec<FlightData>, FlameError> {
-    use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+    use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 
     let options = IpcWriteOptions::default()
         .try_with_compression(None)
@@ -1105,6 +1105,7 @@ fn object_to_flight_data_vec(obj: &Object) -> Result<Vec<FlightData>, FlameError
 
     let data_gen = IpcDataGenerator::default();
     let mut dict_tracker = DictionaryTracker::new(false);
+    let mut compression_ctx = CompressionContext::default();
 
     let base_batch = object_to_batch(obj)?;
     let schema = base_batch.schema();
@@ -1124,7 +1125,7 @@ fn object_to_flight_data_vec(obj: &Object) -> Result<Vec<FlightData>, FlameError
     });
 
     let (encoded_dicts, encoded_batch) = data_gen
-        .encoded_batch(&base_batch, &mut dict_tracker, &options)
+        .encode(&base_batch, &mut dict_tracker, &options, &mut compression_ctx)
         .map_err(|e| FlameError::Internal(format!("Failed to encode base batch: {}", e)))?;
     for dict_batch in encoded_dicts {
         all_flight_data.push(dict_batch.into());
@@ -1134,7 +1135,7 @@ fn object_to_flight_data_vec(obj: &Object) -> Result<Vec<FlightData>, FlameError
     for delta in &obj.deltas {
         let delta_batch = object_to_batch(delta)?;
         let (encoded_dicts, encoded_batch) = data_gen
-            .encoded_batch(&delta_batch, &mut dict_tracker, &options)
+            .encode(&delta_batch, &mut dict_tracker, &options, &mut compression_ctx)
             .map_err(|e| FlameError::Internal(format!("Failed to encode delta batch: {}", e)))?;
         for dict_batch in encoded_dicts {
             all_flight_data.push(dict_batch.into());

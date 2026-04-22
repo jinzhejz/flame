@@ -12,7 +12,7 @@ limitations under the License.
 */
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .type_attribute(".", "#[allow(clippy::doc_overindented_list_items)]")
         .type_attribute(".", "#[allow(clippy::doc_lazy_continuation)]")
         .type_attribute(

@@ -12,7 +12,7 @@ limitations under the License.
 */
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .type_attribute("flame.v1.TaskState", "#[allow(clippy::enum_variant_names)]")
         .type_attribute("flame.v1.Shim", "#[allow(clippy::enum_variant_names)]")
         .type_attribute(
