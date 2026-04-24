@@ -35,3 +35,5 @@ prost-types = { workspace = true }
 base64 = "0.22"
 bson = "2"
 clap = { workspace = true }
+
+rayon = { workspace = true }

@@ -30,7 +30,7 @@ const DEFAULT_SLOT: &str = "cpu=1,mem=2g";
 const DEFAULT_POLICY: &str = "proportion";
 const DEFAULT_STORAGE: &str = "sqlite://flame.db";
 const DEFAULT_MAX_EXECUTORS_PER_NODE: u32 = 128;
-const DEFAULT_SCHEDULE_INTERVAL: u64 = 500;
+const DEFAULT_SCHEDULE_INTERVAL: u64 = 100;
 const DEFAULT_SHIM: &str = "host";
 const DEFAULT_FLAME_CACHE_ENDPOINT: &str = "http://127.0.0.1:9090";
 const DEFAULT_FLAME_CACHE_NETWORK_INTERFACE: &str = "eth0";
@@ -62,6 +62,8 @@ struct FlameClusterYaml {
     pub tls: Option<FlameTlsYaml>,
     /// Resource limits configuration
     pub limits: Option<FlameLimitsYaml>,
+    /// pprof profiling configuration
+    pub pprof: Option<FlamePprofYaml>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +113,11 @@ struct FlameEvictionYaml {
     pub max_objects: Option<usize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FlamePprofYaml {
+    pub port: Option<u16>,
+}
+
 // ============================================================
 // Runtime structs (validated, with helper methods)
 // ============================================================
@@ -128,14 +135,11 @@ pub struct FlameCluster {
     pub slot: ResourceRequirement,
     pub policy: String,
     pub storage: String,
-    /// Schedule interval in milliseconds for the session scheduler loop
     pub schedule_interval: u64,
-    /// Executors configuration
     pub executors: FlameExecutors,
-    /// TLS configuration for Session Manager
     pub tls: Option<FlameTls>,
-    /// Resource limits configuration
     pub limits: FlameLimits,
+    pub pprof: Option<FlamePprof>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -148,6 +152,13 @@ pub struct FlameLimits {
     pub max_sessions: Option<usize>,
     pub max_executors: u32,
 }
+
+#[derive(Debug, Clone)]
+pub struct FlamePprof {
+    pub port: u16,
+}
+
+const DEFAULT_PPROF_PORT: u16 = 6060;
 
 /// TLS configuration for Flame services.
 ///
@@ -366,6 +377,8 @@ impl TryFrom<FlameClusterYaml> for FlameCluster {
 
         let limits = cluster.limits.map(FlameLimits::from).unwrap_or_default();
 
+        let pprof = cluster.pprof.map(FlamePprof::from);
+
         Ok(FlameCluster {
             name: cluster.name,
             endpoint: cluster.endpoint,
@@ -378,6 +391,7 @@ impl TryFrom<FlameClusterYaml> for FlameCluster {
             executors,
             tls,
             limits,
+            pprof,
         })
     }
 }
@@ -409,6 +423,14 @@ impl Default for FlameLimits {
     }
 }
 
+impl From<FlamePprofYaml> for FlamePprof {
+    fn from(yaml: FlamePprofYaml) -> Self {
+        FlamePprof {
+            port: yaml.port.unwrap_or(DEFAULT_PPROF_PORT),
+        }
+    }
+}
+
 impl Default for FlameCluster {
     fn default() -> Self {
         FlameCluster {
@@ -421,6 +443,7 @@ impl Default for FlameCluster {
             executors: FlameExecutors::default(),
             tls: None,
             limits: FlameLimits::default(),
+            pprof: None,
         }
     }
 }

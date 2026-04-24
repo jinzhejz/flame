@@ -169,7 +169,7 @@ pub struct SessionStatus {
     pub state: SessionState,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Session {
     pub id: SessionID,
     pub application: String,
@@ -203,7 +203,7 @@ impl TaskState {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct TaskGID {
     pub ssn_id: SessionID,
     pub task_id: TaskID,

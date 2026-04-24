@@ -13,6 +13,7 @@ limitations under the License.
 
 pub mod apis;
 pub mod ctx;
+pub mod pprof;
 pub mod storage;
 
 use std::string::FromUtf8Error;

@@ -11,8 +11,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-use std::collections::HashMap;
-
 use stdng::lock_ptr;
 
 use super::types::*;
@@ -121,41 +119,5 @@ impl Session {
             )));
         }
         Ok(())
-    }
-}
-
-impl Clone for Session {
-    fn clone(&self) -> Self {
-        let mut ssn = Session {
-            id: self.id.clone(),
-            application: self.application.clone(),
-            slots: self.slots,
-            version: self.version,
-            common_data: self.common_data.clone(),
-            tasks: HashMap::new(),
-            tasks_index: HashMap::new(),
-            creation_time: self.creation_time,
-            completion_time: self.completion_time,
-            events: self.events.clone(),
-            status: self.status.clone(),
-            min_instances: self.min_instances,
-            max_instances: self.max_instances,
-            batch_size: self.batch_size,
-        };
-
-        for (id, t) in &self.tasks {
-            match t.lock() {
-                Ok(t) => {
-                    if let Err(e) = ssn.update_task(&t) {
-                        tracing::error!("Failed to update task: <{id}> for session: <{ssn_id}>, ignore it during clone: {e}", ssn_id = self.id);
-                    }
-                }
-                Err(_) => {
-                    tracing::error!("Failed to lock task: <{id}> for session: <{ssn_id}>, ignore it during clone.", ssn_id = self.id);
-                }
-            }
-        }
-
-        ssn
     }
 }

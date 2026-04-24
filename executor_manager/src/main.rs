@@ -57,6 +57,13 @@ async fn main() -> Result<(), FlameError> {
 
     let mut handlers = vec![];
 
+    if let Some(pprof_config) = &ctx.cluster.pprof {
+        let port = pprof_config.port;
+        tokio::spawn(async move {
+            common::pprof::run_pprof_server(Some(port)).await;
+        });
+    }
+
     let num_cpus = std::thread::available_parallelism()
         .map(|p| p.get())
         .unwrap_or(4);
@@ -79,7 +86,6 @@ async fn main() -> Result<(), FlameError> {
         ctx.cluster.limits.max_executors
     );
 
-    // Keep dedicated runtimes alive for the lifetime of their join handles.
     let cache_rt = if let Some(ref cache_config) = ctx.cache {
         let cache_rt = build_runtime("cache", cache_threads)?;
         let cache_config = cache_config.clone();
@@ -100,7 +106,6 @@ async fn main() -> Result<(), FlameError> {
         None
     };
 
-    // The manager thread will start one thread for each executor.
     let manager_rt = build_runtime("manager", manager_threads)?;
     {
         let ctx = ctx.clone();

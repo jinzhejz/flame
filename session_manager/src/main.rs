@@ -48,6 +48,13 @@ async fn main() -> Result<(), FlameError> {
 
     let mut handlers = vec![];
 
+    if let Some(pprof_config) = &ctx.cluster.pprof {
+        let port = pprof_config.port;
+        tokio::spawn(async move {
+            common::pprof::run_pprof_server(Some(port)).await;
+        });
+    }
+
     let storage = storage::new_ptr(&ctx).await?;
 
     // Load data from engine, e.g. sqlite.
