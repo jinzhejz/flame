@@ -90,7 +90,6 @@ pub trait States: Send + Sync + 'static {
 mod tests {
     use super::*;
     use crate::model::Executor;
-    use crate::notify::NotifyManager;
     use chrono::Utc;
     use common::apis::{ResourceRequirement, Shim};
     use common::ctx::{FlameCluster, FlameClusterContext, FlameExecutors, FlameLimits};
@@ -141,15 +140,12 @@ mod tests {
                     max_sessions: None,
                     max_executors: 10,
                 },
+                pprof: None,
             },
             cache: None,
         };
 
         crate::storage::new_ptr(&ctx).await.unwrap()
-    }
-
-    fn create_mock_notifier() -> NotifyManagerPtr {
-        NotifyManager::new_ptr()
     }
 
     mod void_state_tests {
@@ -517,7 +513,6 @@ mod tests {
             let state = BoundState {
                 storage,
                 executor: exe_ptr.clone(),
-                notifier: create_mock_notifier(),
             };
 
             let result = state.unbind_executor().await;
@@ -532,7 +527,6 @@ mod tests {
             let state = BoundState {
                 storage: create_mock_storage().await,
                 executor: exe_ptr.clone(),
-                notifier: create_mock_notifier(),
             };
 
             let result = state.register_executor().await;
@@ -547,7 +541,6 @@ mod tests {
             let state = BoundState {
                 storage: create_mock_storage().await,
                 executor: exe_ptr.clone(),
-                notifier: create_mock_notifier(),
             };
 
             let result = state.release_executor().await;
@@ -562,7 +555,6 @@ mod tests {
             let state = BoundState {
                 storage: create_mock_storage().await,
                 executor: exe_ptr.clone(),
-                notifier: create_mock_notifier(),
             };
 
             let result = state.unregister_executor().await;
@@ -577,7 +569,6 @@ mod tests {
             let state = BoundState {
                 storage: create_mock_storage().await,
                 executor: exe_ptr.clone(),
-                notifier: create_mock_notifier(),
             };
 
             let ssn_ptr = new_ptr(common::apis::Session::default());
@@ -593,7 +584,6 @@ mod tests {
             let state = BoundState {
                 storage: create_mock_storage().await,
                 executor: exe_ptr.clone(),
-                notifier: create_mock_notifier(),
             };
 
             let result = state.bind_session_completed().await;
@@ -608,7 +598,6 @@ mod tests {
             let state = BoundState {
                 storage: create_mock_storage().await,
                 executor: exe_ptr.clone(),
-                notifier: create_mock_notifier(),
             };
 
             let result = state.unbind_executor_completed().await;
@@ -898,7 +887,7 @@ mod tests {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Void);
             let storage = create_mock_storage().await;
 
-            let result = from(storage, create_mock_notifier(), exe_ptr);
+            let result = from(storage, exe_ptr);
 
             assert!(result.is_ok());
         }
@@ -908,7 +897,7 @@ mod tests {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Idle);
             let storage = create_mock_storage().await;
 
-            let result = from(storage, create_mock_notifier(), exe_ptr);
+            let result = from(storage, exe_ptr);
 
             assert!(result.is_ok());
         }
@@ -918,7 +907,7 @@ mod tests {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Binding);
             let storage = create_mock_storage().await;
 
-            let result = from(storage, create_mock_notifier(), exe_ptr);
+            let result = from(storage, exe_ptr);
 
             assert!(result.is_ok());
         }
@@ -928,7 +917,7 @@ mod tests {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Bound);
             let storage = create_mock_storage().await;
 
-            let result = from(storage, create_mock_notifier(), exe_ptr);
+            let result = from(storage, exe_ptr);
 
             assert!(result.is_ok());
         }
@@ -938,7 +927,7 @@ mod tests {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Unbinding);
             let storage = create_mock_storage().await;
 
-            let result = from(storage, create_mock_notifier(), exe_ptr);
+            let result = from(storage, exe_ptr);
 
             assert!(result.is_ok());
         }
@@ -948,7 +937,7 @@ mod tests {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Releasing);
             let storage = create_mock_storage().await;
 
-            let result = from(storage, create_mock_notifier(), exe_ptr);
+            let result = from(storage, exe_ptr);
 
             assert!(result.is_ok());
         }
@@ -958,7 +947,7 @@ mod tests {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Unknown);
             let storage = create_mock_storage().await;
 
-            let result = from(storage, create_mock_notifier(), exe_ptr);
+            let result = from(storage, exe_ptr);
 
             assert!(result.is_err());
             assert!(matches!(result, Err(FlameError::InvalidState(_))));
@@ -969,7 +958,7 @@ mod tests {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Released);
             let storage = create_mock_storage().await;
 
-            let result = from(storage, create_mock_notifier(), exe_ptr);
+            let result = from(storage, exe_ptr);
 
             assert!(result.is_err());
             assert!(matches!(result, Err(FlameError::InvalidState(_))));
@@ -1013,7 +1002,6 @@ mod tests {
             let bound_state = BoundState {
                 storage: storage.clone(),
                 executor: exe_ptr.clone(),
-                notifier: create_mock_notifier(),
             };
             bound_state.unbind_executor().await.unwrap();
             assert_eq!(get_state(&exe_ptr).unwrap(), ExecutorState::Unbinding);
