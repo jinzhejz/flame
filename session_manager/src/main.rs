@@ -23,7 +23,6 @@ mod controller;
 mod events;
 mod model;
 mod notify;
-mod pprof;
 mod provider;
 pub mod scheduler;
 mod storage;
@@ -52,7 +51,7 @@ async fn main() -> Result<(), FlameError> {
     if let Some(pprof_config) = &ctx.cluster.pprof {
         let port = pprof_config.port;
         tokio::spawn(async move {
-            pprof::run_pprof_server(Some(port)).await;
+            common::pprof::run_pprof_server(Some(port)).await;
         });
     }
 

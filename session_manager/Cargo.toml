@@ -3,8 +3,6 @@ name = "flame-session-manager"
 version = "0.5.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 rpc = { path = "../rpc" }
 common = { path = "../common" }
@@ -35,7 +33,6 @@ jsonschema = { workspace = true }
 
 uuid = { workspace = true }
 
-# Filesystem storage engine dependencies
 crc32fast = "1.3"
 
 [dev-dependencies]

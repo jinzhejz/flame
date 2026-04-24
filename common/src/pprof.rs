@@ -1,5 +1,5 @@
 /*
-Copyright 2023 The Flame Authors.
+Copyright 2025 The Flame Authors.
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -109,7 +109,8 @@ async fn cpu_profile_proto(Query(params): Query<ProfileParams>) -> impl IntoResp
                 }
             };
             let mut body = Vec::new();
-            if let Err(e) = pprof::protos::Message::encode(&profile, &mut body) {
+            use pprof::protos::Message;
+            if let Err(e) = profile.encode(&mut body) {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Failed to encode pprof proto: {}", e),

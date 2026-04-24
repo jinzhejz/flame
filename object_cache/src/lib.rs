@@ -14,7 +14,6 @@ limitations under the License.
 pub mod cache;
 pub mod eviction;
 
-// Re-export commonly used types
 pub use cache::{run, CacheEndpoint, FlightCacheServer, Object, ObjectCache, ObjectMetadata};
 pub use eviction::{
     new_policy, EvictionConfig, EvictionPolicy, EvictionPolicyPtr, LRUPolicy, NoEvictionPolicy,

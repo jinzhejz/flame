@@ -13,10 +13,11 @@ limitations under the License.
 
 import base64
 import json
+import threading
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import bson
 import cloudpickle
@@ -92,39 +93,32 @@ def _deserialize_object(batch: pa.RecordBatch) -> Any:
     return cloudpickle.loads(data_bytes)
 
 
+_client_pool: Dict[str, flight.FlightClient] = {}
+_client_pool_lock = threading.Lock()
+
+
 def _get_flight_client(endpoint: str, tls_config: Optional[FlameClientTls] = None) -> flight.FlightClient:
-    """Create a Flight client from endpoint URL.
-
-    Args:
-        endpoint: Cache endpoint. Supported schemes:
-            - grpc:// - plaintext connection
-            - grpcs:// - TLS connection (converted to grpc+tls://)
-            - grpc+tls:// - TLS connection (native PyArrow Flight format)
-        tls_config: Optional TLS configuration with CA certificate path
-
-    Returns:
-        FlightClient instance
-    """
-    # Normalize endpoint scheme for PyArrow Flight
-    # grpcs:// is our config format, grpc+tls:// is PyArrow's format
     if endpoint.startswith("grpcs://"):
         location = endpoint.replace("grpcs://", "grpc+tls://")
     else:
         location = endpoint
 
-    # Check if TLS is required
-    if location.startswith("grpc+tls://"):
-        # Load TLS certificates if provided
-        if tls_config and tls_config.ca_file:
-            with open(tls_config.ca_file, "rb") as f:
-                root_certs = f.read()
-            return flight.FlightClient(location, tls_root_certs=root_certs)
+    with _client_pool_lock:
+        if location in _client_pool:
+            return _client_pool[location]
+
+        if location.startswith("grpc+tls://"):
+            if tls_config and tls_config.ca_file:
+                with open(tls_config.ca_file, "rb") as f:
+                    root_certs = f.read()
+                client = flight.FlightClient(location, tls_root_certs=root_certs)
+            else:
+                client = flight.FlightClient(location)
         else:
-            # Use system CA bundle
-            return flight.FlightClient(location)
-    else:
-        # Non-TLS connection
-        return flight.FlightClient(location)
+            client = flight.FlightClient(location)
+
+        _client_pool[location] = client
+        return client
 
 
 def _do_put_remote(client: flight.FlightClient, descriptor: flight.FlightDescriptor, batch: pa.RecordBatch) -> "ObjectRef":

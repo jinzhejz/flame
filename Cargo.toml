@@ -69,3 +69,10 @@ gethostname = "1"
 arrow = "58"
 arrow-flight = "58"
 arrow-ipc = { version = "58", features = ["zstd"] }
+
+# profiling and HTTP
+axum = "0.8"
+pprof = { version = "0.14", features = ["flamegraph", "prost-codec"] }
+
+# parallelism
+rayon = "1.10"
