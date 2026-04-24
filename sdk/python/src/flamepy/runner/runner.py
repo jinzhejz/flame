@@ -126,7 +126,7 @@ class RunnerService:
         _session: The Flame session for task execution
     """
 
-    def __init__(self, app: str, execution_object: Any, stateful: bool = False, autoscale: bool = True):
+    def __init__(self, app: str, execution_object: Any, stateful: bool = False, autoscale: bool = True, warmup: int = 0):
         """Initialize a RunnerService.
 
         Args:
@@ -141,6 +141,7 @@ class RunnerService:
                      after each task. If False, do not persist state.
             autoscale: If True, create instances dynamically based on pending tasks (min=0, max=None).
                       If False, create exactly one instance (min=1, max=1).
+            warmup: Number of instances to pre-create at session start. Only used when autoscale=True.
         """
         self._app = app
         self._execution_object = execution_object
@@ -163,7 +164,7 @@ class RunnerService:
         # Create a session with flamepy.runner.runpy service
         # For RL module: serialize RunnerContext with cloudpickle, put in cache to get ObjectRef,
         # then encode ObjectRef to bytes for core API
-        runner_context = RunnerContext(execution_object=execution_object, stateful=stateful, autoscale=autoscale)
+        runner_context = RunnerContext(execution_object=execution_object, stateful=stateful, autoscale=autoscale, warmup=warmup)
         # Serialize the context using cloudpickle
         serialized_ctx = cloudpickle.dumps(runner_context, protocol=cloudpickle.DEFAULT_PROTOCOL)
         # Put in cache to get ObjectRef
@@ -505,7 +506,7 @@ class Runner:
 
         self._started = False
 
-    def service(self, execution_object: Any, stateful: Optional[bool] = None, autoscale: Optional[bool] = None) -> RunnerService:
+    def service(self, execution_object: Any, stateful: Optional[bool] = None, autoscale: Optional[bool] = None, warmup: int = 0) -> RunnerService:
         """Create a RunnerService for the given execution object.
 
         Args:
@@ -516,6 +517,8 @@ class Runner:
             autoscale: If True, create instances dynamically based on pending tasks (min=0, max=None).
                       If False, create exactly one instance (min=1, max=1).
                       If None, use default based on execution_object type.
+            warmup: Number of instances to pre-create at session start. Only used when autoscale=True.
+                   When set, min_instances is set to this value for warmup. Default: 0.
 
         Returns:
             A RunnerService instance
@@ -543,10 +546,10 @@ class Runner:
 
         # Step 4: Do NOT instantiate classes (keep as-is)
         # The class will be instantiated on each executor in FlameRunpyService.on_session_enter
-        logger.debug(f"Creating service for {type(execution_object).__name__} (stateful={stateful}, autoscale={autoscale})")
+        logger.debug(f"Creating service for {type(execution_object).__name__} (stateful={stateful}, autoscale={autoscale}, warmup={warmup})")
 
         # Step 5: Create the RunnerService
-        runner_service = RunnerService(self._name, execution_object, stateful=stateful, autoscale=autoscale)
+        runner_service = RunnerService(self._name, execution_object, stateful=stateful, autoscale=autoscale, warmup=warmup)
         self._services.append(runner_service)
 
         logger.debug(f"Created service for execution object in Runner '{self._name}'")

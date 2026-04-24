@@ -23,6 +23,7 @@ mod controller;
 mod events;
 mod model;
 mod notify;
+mod pprof;
 mod provider;
 pub mod scheduler;
 mod storage;
@@ -47,6 +48,13 @@ async fn main() -> Result<(), FlameError> {
     tracing::info!("flame-session-manager is starting ...");
 
     let mut handlers = vec![];
+
+    if let Some(pprof_config) = &ctx.cluster.pprof {
+        let port = pprof_config.port;
+        tokio::spawn(async move {
+            pprof::run_pprof_server(Some(port)).await;
+        });
+    }
 
     let storage = storage::new_ptr(&ctx).await?;
 

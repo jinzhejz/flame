@@ -72,38 +72,30 @@ class SessionContext:
 class RunnerContext:
     """Context for runner session containing the shared execution object.
 
-    This class encapsulates data shared within a session, including the
-    execution object specific to the session.
-
     Attributes:
-        execution_object: The execution object for the customized session. This can be
-                          any Python object (function, class, instance, etc.) that will
-                          be used to execute tasks within the session.
-        stateful: If True, persist the execution object state back to flame-cache
-                  after each task. If False, do not persist state.
-        autoscale: If True, create instances dynamically based on pending tasks (min=0, max=None).
-                   If False, create exactly one instance (min=1, max=1).
-        min_instances: Minimum number of instances (computed from autoscale)
-        max_instances: Maximum number of instances (computed from autoscale)
+        execution_object: The execution object for the customized session.
+        stateful: If True, persist the execution object state back to flame-cache after each task.
+        autoscale: If True, create instances dynamically (min=warmup or 0, max=None).
+                   If False, create fixed instances (min=max=warmup or 1).
+        warmup: Number of instances to pre-create. When autoscale=True, sets min_instances.
+                When autoscale=False, sets both min_instances and max_instances.
+        min_instances: Minimum number of instances (computed from autoscale and warmup)
+        max_instances: Maximum number of instances (computed from autoscale and warmup)
     """
 
     execution_object: Any
     stateful: bool = False
     autoscale: bool = True
+    warmup: int = 0
     min_instances: int = field(init=False, repr=False)
     max_instances: Optional[int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Compute min/max instances and validate configuration."""
-        # Compute min/max instances based on autoscale
-        if self.autoscale:
-            self.min_instances = 0
-            self.max_instances = None  # Unlimited
-        else:
-            self.min_instances = 1
-            self.max_instances = 1  # Single instance
+        default_min = 0 if self.autoscale else 1
+        self.min_instances = self.warmup if self.warmup > 0 else default_min
+        self.max_instances = None if self.autoscale else self.min_instances
 
-        # Validation: classes cannot be stateful (only instances can)
         if self.stateful and inspect.isclass(self.execution_object):
             raise ValueError("Cannot set stateful=True for a class. Classes themselves cannot maintain state; only instances can. Pass an instance instead, or set stateful=False.")
 

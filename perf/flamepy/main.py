@@ -32,7 +32,7 @@ from flamepy.core.types import TaskState
 from flamepy.runner import Runner
 from flamepy.runner.runner import RunnerService
 
-NUM_SESSIONS = 6
+NUM_SESSIONS = 3
 TASKS_PER_SESSION = 1000
 WARMUP_SECS = 30
 TIMEOUT_SECS = 600

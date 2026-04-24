@@ -169,7 +169,7 @@ pub struct SessionStatus {
     pub state: SessionState,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Session {
     pub id: SessionID,
     pub application: String,
