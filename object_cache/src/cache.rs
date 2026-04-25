@@ -12,8 +12,6 @@ limitations under the License.
 */
 
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -23,7 +21,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::{
     CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
 };
-use arrow::ipc::{reader::FileReader, writer::FileWriter, CompressionType};
+use arrow::ipc::CompressionType;
 use arrow_flight::{
     flight_service_server::{FlightService, FlightServiceServer},
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
@@ -46,12 +44,6 @@ use common::ctx::FlameCache;
 use common::FlameError;
 
 use crate::eviction::{new_policy, EvictionConfig, EvictionPolicyPtr};
-
-/// Maximum number of deltas allowed per object before requiring compaction.
-/// This prevents unbounded growth of delta files.
-/// When this limit is reached, patch operations will return an error suggesting
-/// the client should use update_object to compact the deltas.
-const MAX_DELTAS_PER_OBJECT: u64 = 1000;
 
 /// Default batch size for eviction operations
 const EVICTION_BATCH_SIZE: usize = 10;
@@ -219,37 +211,50 @@ impl TryFrom<&String> for CacheEndpoint {
 
 pub struct ObjectCache {
     endpoint: CacheEndpoint,
-    storage_path: Option<PathBuf>,
-    /// In-memory object storage (key present = in memory)
+    storage: crate::storage::StorageEnginePtr,
     objects: MutexPtr<HashMap<String, Object>>,
-    /// Object metadata index (always in memory, tracks all objects)
     metadata: MutexPtr<HashMap<String, ObjectMetadata>>,
-    /// Eviction policy
     eviction_policy: EvictionPolicyPtr,
 }
 
 impl ObjectCache {
     fn new(
         endpoint: CacheEndpoint,
-        storage_path: Option<PathBuf>,
+        storage: crate::storage::StorageEnginePtr,
         eviction_config: Option<&EvictionConfig>,
     ) -> Result<Self, FlameError> {
         let eviction_policy = new_policy(eviction_config);
 
-        let cache = Self {
+        Ok(Self {
             endpoint,
-            storage_path: storage_path.clone(),
+            storage,
             objects: new_ptr(HashMap::new()),
             metadata: new_ptr(HashMap::new()),
             eviction_policy,
-        };
+        })
+    }
 
-        // Load existing objects from disk
-        if let Some(storage_path) = &storage_path {
-            cache.load_from_disk(storage_path)?;
+    async fn load_from_storage(&self) -> Result<(), FlameError> {
+        let items = self.storage.load_objects().await?;
+
+        let mut objects = lock_ptr!(self.objects)?;
+        let mut metadata = lock_ptr!(self.metadata)?;
+
+        for (key, object, delta_count) in items {
+            let size = object.data.len() as u64;
+            let meta = self.create_metadata(key.clone(), size, delta_count);
+
+            objects.insert(key.clone(), object);
+            metadata.insert(key.clone(), meta);
+
+            self.eviction_policy.on_add(&key, size);
         }
 
-        Ok(cache)
+        drop(objects);
+        drop(metadata);
+        self.run_eviction()?;
+
+        Ok(())
     }
 
     fn create_metadata(&self, key: String, size: u64, delta_count: u64) -> ObjectMetadata {
@@ -262,129 +267,6 @@ impl ObjectCache {
         }
     }
 
-    /// Get the delta directory path for an object
-    fn get_delta_dir(&self, key: &str) -> Option<PathBuf> {
-        self.storage_path
-            .as_ref()
-            .map(|p| p.join(format!("{}.deltas", key)))
-    }
-
-    /// Count the number of delta files for an object.
-    /// Returns 0 if the delta directory doesn't exist or is empty.
-    fn count_deltas(&self, key: &str) -> u64 {
-        let delta_dir = match self.get_delta_dir(key) {
-            Some(dir) => dir,
-            None => return 0,
-        };
-
-        if !delta_dir.exists() {
-            return 0;
-        }
-
-        match fs::read_dir(&delta_dir) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("arrow"))
-                .count() as u64,
-            Err(e) => {
-                tracing::warn!("Failed to read delta directory {:?}: {}", delta_dir, e);
-                0
-            }
-        }
-    }
-
-    /// Delete all deltas for an object
-    fn clear_deltas(&self, key: &str) -> Result<(), FlameError> {
-        if let Some(delta_dir) = self.get_delta_dir(key) {
-            if delta_dir.exists() {
-                fs::remove_dir_all(&delta_dir)?;
-                tracing::debug!("Cleared deltas for object: {}", key);
-            }
-        }
-        Ok(())
-    }
-
-    fn load_session_objects(
-        &self,
-        session_path: &Path,
-        objects: &mut HashMap<String, Object>,
-        metadata_map: &mut HashMap<String, ObjectMetadata>,
-    ) -> Result<(), FlameError> {
-        let session_id = session_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| FlameError::Internal("Invalid session directory name".to_string()))?;
-
-        for object_entry in fs::read_dir(session_path)? {
-            let object_entry = object_entry?;
-            let object_path = object_entry.path();
-
-            // Skip delta directories
-            if object_path.is_dir() {
-                continue;
-            }
-
-            if object_path.extension().and_then(|e| e.to_str()) != Some("arrow") {
-                continue;
-            }
-
-            let object_id = object_path
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| FlameError::Internal("Invalid object file name".to_string()))?;
-
-            let key = format!("{}/{}", session_id, object_id);
-            let size = fs::metadata(&object_path)?.len();
-            let delta_count = self.count_deltas(&key);
-
-            // Load object into memory
-            let object = self.load_object_from_disk_internal(&object_path)?;
-            let meta = self.create_metadata(key.clone(), size, delta_count);
-
-            tracing::debug!("Loaded object: {} (deltas: {})", key, delta_count);
-            objects.insert(key.clone(), object);
-            metadata_map.insert(key.clone(), meta);
-
-            // Track in eviction policy
-            self.eviction_policy.on_add(&key, size);
-        }
-
-        Ok(())
-    }
-
-    fn load_from_disk(&self, storage_path: &Path) -> Result<(), FlameError> {
-        if !storage_path.exists() {
-            tracing::info!("Creating storage directory: {:?}", storage_path);
-            fs::create_dir_all(storage_path)?;
-            return Ok(());
-        }
-
-        tracing::info!("Loading objects from disk: {:?}", storage_path);
-        let mut objects = lock_ptr!(self.objects)?;
-        let mut metadata = lock_ptr!(self.metadata)?;
-
-        for session_entry in fs::read_dir(storage_path)? {
-            let session_entry = session_entry?;
-            let session_path = session_entry.path();
-
-            if !session_path.is_dir() {
-                continue;
-            }
-
-            self.load_session_objects(&session_path, &mut objects, &mut metadata)?;
-        }
-
-        tracing::info!("Loaded {} objects from disk", objects.len());
-
-        // Run eviction if needed after loading
-        drop(objects);
-        drop(metadata);
-        self.run_eviction()?;
-
-        Ok(())
-    }
-
-    /// Run eviction if needed, removing least recently used objects from memory.
     fn run_eviction(&self) -> Result<(), FlameError> {
         loop {
             let keys_to_evict = self.eviction_policy.victims(EVICTION_BATCH_SIZE);
@@ -395,7 +277,6 @@ impl ObjectCache {
             let mut objects = lock_ptr!(self.objects)?;
             for key in keys_to_evict {
                 if objects.contains_key(&key) {
-                    // Remove from in-memory storage (metadata is kept)
                     objects.remove(&key);
                     self.eviction_policy.on_evict(&key);
                     tracing::debug!("Evicted object from memory: {}", key);
@@ -403,28 +284,6 @@ impl ObjectCache {
             }
         }
         Ok(())
-    }
-
-    fn load_object_from_disk_internal(&self, object_path: &Path) -> Result<Object, FlameError> {
-        let file = fs::File::open(object_path)
-            .map_err(|e| FlameError::NotFound(format!("Object file not found: {}", e)))?;
-        let reader = FileReader::try_new(file, None)
-            .map_err(|e| FlameError::Internal(format!("Failed to create reader: {}", e)))?;
-
-        // SAFETY: Skip validation for trusted cache data (3-9x faster reads).
-        // This is safe because all data in the cache was written by this service.
-        let reader = unsafe { reader.with_skip_validation(true) };
-
-        let batch = reader
-            .into_iter()
-            .next()
-            .ok_or_else(|| FlameError::Internal("No batches in file".to_string()))?
-            .map_err(|e| FlameError::Internal(format!("Failed to read batch: {}", e)))?;
-
-        let object = batch_to_object(&batch)
-            .map_err(|e| FlameError::Internal(format!("Failed to parse batch: {}", e)))?;
-
-        Ok(object)
     }
 
     async fn put(
@@ -448,27 +307,10 @@ impl ObjectCache {
         let key = format!("{}/{}", session_id, object_id);
         let size = object.data.len() as u64;
 
-        // Write to disk if storage is configured
-        if let Some(storage_path) = &self.storage_path {
-            // Create session directory
-            let session_dir = storage_path.join(&session_id);
-            fs::create_dir_all(&session_dir)?;
-
-            // Write object to Arrow IPC file
-            let object_path = session_dir.join(format!("{}.arrow", object_id));
-            let batch = object_to_batch(&object)
-                .map_err(|e| FlameError::Internal(format!("Failed to create batch: {}", e)))?;
-
-            write_batch_to_file(&object_path, &batch)?;
-            tracing::debug!("Wrote object to disk: {:?}", object_path);
-
-            // Clear any existing deltas (clean slate per HLD)
-            self.clear_deltas(&key)?;
-        }
+        self.storage.write_object(&key, &object).await?;
 
         let meta = self.create_metadata(key.clone(), size, 0);
 
-        // Update in-memory storage
         {
             let mut objects = lock_ptr!(self.objects)?;
             let mut metadata = lock_ptr!(self.metadata)?;
@@ -477,7 +319,6 @@ impl ObjectCache {
             metadata.insert(key.clone(), meta.clone());
         }
 
-        // Track in eviction policy and run eviction if needed
         self.eviction_policy.on_add(&key, size);
         self.run_eviction()?;
 
@@ -486,175 +327,38 @@ impl ObjectCache {
         Ok(meta)
     }
 
-    fn load_object_from_disk(&self, key: &str) -> Result<Object, FlameError> {
-        validate_key(key)?;
-
-        let storage_path = self
-            .storage_path
-            .as_ref()
-            .ok_or_else(|| FlameError::InvalidConfig("Storage path not configured".to_string()))?;
-
-        let object_path = storage_path.join(format!("{}.arrow", key));
-        self.load_object_from_disk_internal(&object_path)
-    }
-
-    fn load_deltas_from_disk(&self, key: &str) -> Result<Vec<Object>, FlameError> {
-        use rayon::prelude::*;
-
-        let delta_dir = match self.get_delta_dir(key) {
-            Some(dir) if dir.exists() => dir,
-            _ => return Ok(Vec::new()),
-        };
-
-        let entries = match fs::read_dir(&delta_dir) {
-            Ok(entries) => entries,
-            Err(e) => {
-                tracing::warn!("Failed to read delta directory {:?}: {}", delta_dir, e);
-                return Ok(Vec::new());
-            }
-        };
-
-        let mut delta_files: Vec<_> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("arrow"))
-            .collect();
-
-        delta_files.sort_by_key(|e| {
-            e.path()
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(u64::MAX)
-        });
-
-        let deltas: Result<Vec<Object>, FlameError> = delta_files
-            .into_par_iter()
-            .map(|entry| {
-                let path = entry.path();
-                let file = fs::File::open(&path).map_err(|e| {
-                    FlameError::Internal(format!("Failed to open delta file {:?}: {}", path, e))
-                })?;
-                let reader = FileReader::try_new(file, None).map_err(|e| {
-                    FlameError::Internal(format!("Failed to create reader for {:?}: {}", path, e))
-                })?;
-                // SAFETY: Skip validation for trusted cache data written by this service.
-                let reader = unsafe { reader.with_skip_validation(true) };
-
-                let batch = reader
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        FlameError::Internal(format!("No batches in delta file {:?}", path))
-                    })?
-                    .map_err(|e| {
-                        FlameError::Internal(format!(
-                            "Failed to read delta batch from {:?}: {}",
-                            path, e
-                        ))
-                    })?;
-
-                batch_to_object(&batch).map_err(|e| {
-                    FlameError::Internal(format!("Failed to parse delta from {:?}: {}", path, e))
-                })
-            })
-            .collect();
-
-        deltas
-    }
-
-    fn try_load_and_index(&self, key: &str) -> Result<Option<Object>, FlameError> {
-        validate_key(key)?;
-
-        let storage_path = match &self.storage_path {
-            Some(path) => path,
-            None => return Ok(None),
-        };
-
-        let object_path = storage_path.join(format!("{}.arrow", key));
-        if !object_path.exists() {
-            return Ok(None);
-        }
-
-        let object = self.load_object_from_disk_internal(&object_path)?;
-        let size = object.data.len() as u64;
-        let delta_count = self.count_deltas(key);
-
-        // Add to in-memory storage
-        {
-            let mut objects = lock_ptr!(self.objects)?;
-            let mut metadata = lock_ptr!(self.metadata)?;
-
-            objects.insert(key.to_string(), object.clone());
-
-            let meta = self.create_metadata(key.to_string(), size, delta_count);
-            metadata.insert(key.to_string(), meta);
-        }
-
-        // Track in eviction policy
-        self.eviction_policy.on_add(key, size);
-        self.run_eviction()?;
-
-        tracing::debug!("Loaded object from disk: {} (deltas: {})", key, delta_count);
-        Ok(Some(object))
-    }
-
-    /// Get an object with all its deltas populated in the deltas field.
-    /// Creates a new Object with deltas rather than mutating an existing one.
     async fn get(&self, key: String) -> Result<Object, FlameError> {
         validate_key(&key)?;
 
         self.eviction_policy.on_access(&key);
 
-        // Check if object is in memory
         {
             let objects = lock_ptr!(self.objects)?;
             if let Some(object) = objects.get(&key) {
                 tracing::debug!("Object get from memory: {}", key);
-                // Load deltas and return object with deltas
-                let deltas = self.load_deltas_from_disk(&key)?;
-                return Ok(Object::with_deltas(
-                    object.version,
-                    object.data.clone(),
-                    deltas,
-                ));
+                return Ok(object.clone());
             }
         }
 
-        // Check if object exists in metadata (on disk but not in memory)
-        let exists_in_metadata = {
-            let metadata = lock_ptr!(self.metadata)?;
-            metadata.contains_key(&key)
-        };
-
-        if exists_in_metadata {
-            // Object is on disk, reload into memory
-            let object = self.load_object_from_disk(&key)?;
+        if let Some(object) = self.storage.read_object(&key).await? {
             let size = object.data.len() as u64;
+            let delta_count = object.deltas.len() as u64;
 
-            // Add back to memory
             {
                 let mut objects = lock_ptr!(self.objects)?;
+                let mut metadata = lock_ptr!(self.metadata)?;
+
                 objects.insert(key.clone(), object.clone());
+
+                let meta = self.create_metadata(key.clone(), size, delta_count);
+                metadata.insert(key.clone(), meta);
             }
 
-            // Track in eviction policy and run eviction
             self.eviction_policy.on_add(&key, size);
             self.run_eviction()?;
 
-            // Load deltas and return
-            let deltas = self.load_deltas_from_disk(&key)?;
-            tracing::debug!(
-                "Object reloaded from disk: {} (deltas: {})",
-                key,
-                deltas.len()
-            );
-            return Ok(Object::with_deltas(object.version, object.data, deltas));
-        }
-
-        // Try to load from disk (not in index)
-        if let Some(base) = self.try_load_and_index(&key)? {
-            let deltas = self.load_deltas_from_disk(&key)?;
-            return Ok(Object::with_deltas(base.version, base.data, deltas));
+            tracing::debug!("Object loaded from storage: {}", key);
+            return Ok(object);
         }
 
         Err(FlameError::NotFound(format!("object <{}> not found", key)))
@@ -663,32 +367,12 @@ impl ObjectCache {
     async fn update(&self, key: String, new_object: Object) -> Result<ObjectMetadata, FlameError> {
         validate_key(&key)?;
 
-        let parts: Vec<&str> = key.split('/').collect();
-        if parts.len() != 2 {
-            return Err(FlameError::InvalidConfig(format!(
-                "Invalid key format: {}",
-                key
-            )));
-        }
-
         let size = new_object.data.len() as u64;
 
-        // Write to disk if storage is configured
-        if let Some(storage_path) = &self.storage_path {
-            let object_path = storage_path.join(format!("{}.arrow", key));
-            let batch = object_to_batch(&new_object)
-                .map_err(|e| FlameError::Internal(format!("Failed to create batch: {}", e)))?;
-
-            write_batch_to_file(&object_path, &batch)?;
-            tracing::debug!("Updated object on disk: {:?}", object_path);
-
-            // Clear all deltas per HLD
-            self.clear_deltas(&key)?;
-        }
+        self.storage.write_object(&key, &new_object).await?;
 
         let meta = self.create_metadata(key.clone(), size, 0);
 
-        // Update in-memory storage
         {
             let mut objects = lock_ptr!(self.objects)?;
             let mut metadata = lock_ptr!(self.metadata)?;
@@ -697,7 +381,6 @@ impl ObjectCache {
             metadata.insert(key.clone(), meta.clone());
         }
 
-        // Track in eviction policy
         self.eviction_policy.on_add(&key, size);
         self.run_eviction()?;
 
@@ -706,85 +389,29 @@ impl ObjectCache {
         Ok(meta)
     }
 
-    /// Append a delta to an existing object (PATCH operation).
-    ///
-    /// # Errors
-    /// - Returns NotFound if the base object doesn't exist
-    /// - Returns InvalidConfig if storage path is not configured
-    /// - Returns InvalidState if delta count exceeds MAX_DELTAS_PER_OBJECT
     async fn patch(&self, key: String, delta: Object) -> Result<ObjectMetadata, FlameError> {
         validate_key(&key)?;
 
         self.eviction_policy.on_access(&key);
 
-        let storage_path = self
-            .storage_path
-            .as_ref()
-            .ok_or_else(|| FlameError::InvalidConfig("Storage path not configured".to_string()))?;
+        let mut meta = self.storage.patch_object(&key, &delta).await?;
+        meta.endpoint = self.endpoint.to_uri();
 
-        // Reserve the next delta index atomically under the lock
-        let next_index = {
+        {
             let mut metadata = lock_ptr!(self.metadata)?;
-            let current_delta_count = match metadata.get(&key) {
-                Some(meta) => meta.delta_count,
-                None => {
-                    drop(metadata);
-                    if self.try_load_and_index(&key)?.is_none() {
-                        return Err(FlameError::NotFound(format!(
-                            "object <{}> not found, must put first",
-                            key
-                        )));
-                    }
-                    metadata = lock_ptr!(self.metadata)?;
-                    metadata.get(&key).map(|m| m.delta_count).unwrap_or(0)
-                }
-            };
-
-            if current_delta_count >= MAX_DELTAS_PER_OBJECT {
-                return Err(FlameError::InvalidState(format!(
-                    "object <{}> has reached maximum delta count ({}). Use update_object to compact deltas.",
-                    key, MAX_DELTAS_PER_OBJECT
-                )));
-            }
-
-            // Reserve the index by incrementing delta_count now
-            if let Some(meta) = metadata.get_mut(&key) {
-                meta.delta_count = current_delta_count + 1;
-            }
-            current_delta_count
-        };
-
-        // Write delta file outside the lock (I/O can be slow)
-        let delta_dir = storage_path.join(format!("{}.deltas", key));
-        fs::create_dir_all(&delta_dir)?;
-
-        let delta_path = delta_dir.join(format!("{}.arrow", next_index));
-        let batch = object_to_batch(&delta)
-            .map_err(|e| FlameError::Internal(format!("Failed to create delta batch: {}", e)))?;
-
-        if let Err(e) = write_batch_to_file(&delta_path, &batch) {
-            // Rollback: decrement delta_count on write failure
-            let mut metadata = lock_ptr!(self.metadata)?;
-            if let Some(meta) = metadata.get_mut(&key) {
-                meta.delta_count = meta.delta_count.saturating_sub(1);
-            }
-            return Err(e);
+            metadata.insert(key.clone(), meta.clone());
         }
 
-        tracing::debug!("Wrote delta {} to disk: {:?}", next_index, delta_path);
+        // Invalidate in-memory cache to force reload with new delta on next access
+        {
+            let mut objects = lock_ptr!(self.objects)?;
+            if objects.remove(&key).is_some() {
+                self.eviction_policy.on_remove(&key);
+            }
+        }
 
-        let metadata = lock_ptr!(self.metadata)?;
-        let updated = metadata
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| FlameError::Internal("Failed to get metadata".to_string()))?;
-
-        tracing::debug!(
-            "Object patch: {} (delta_count: {})",
-            key,
-            updated.delta_count
-        );
-        Ok(updated)
+        tracing::debug!("Object patch: {} (delta_count: {})", key, meta.delta_count);
+        Ok(meta)
     }
 
     async fn delete(&self, session_id: SessionID) -> Result<(), FlameError> {
@@ -801,18 +428,9 @@ impl ObjectCache {
 
         for key in &keys_to_remove {
             self.eviction_policy.on_remove(key);
-            // Also clear deltas for each object
-            self.clear_deltas(key)?;
         }
 
-        // Delete session directory and all objects (including deltas)
-        if let Some(storage_path) = &self.storage_path {
-            let session_dir = storage_path.join(&session_id);
-            if session_dir.exists() {
-                fs::remove_dir_all(&session_dir)?;
-                tracing::debug!("Deleted session directory: {:?}", session_dir);
-            }
-        }
+        self.storage.delete_objects(&session_id).await?;
 
         {
             let mut objects = lock_ptr!(self.objects)?;
@@ -1043,22 +661,6 @@ fn get_object_schema() -> Schema {
         Field::new("version", DataType::UInt64, false),
         Field::new("data", DataType::Binary, false),
     ])
-}
-
-fn write_batch_to_file(path: &Path, batch: &RecordBatch) -> Result<(), FlameError> {
-    let file = fs::File::create(path)?;
-    let options = IpcWriteOptions::default()
-        .try_with_compression(Some(CompressionType::ZSTD))
-        .map_err(|e| FlameError::Internal(format!("Failed to set compression: {}", e)))?;
-    let mut writer = FileWriter::try_new_with_options(file, &batch.schema(), options)
-        .map_err(|e| FlameError::Internal(format!("Failed to create writer: {}", e)))?;
-    writer
-        .write(batch)
-        .map_err(|e| FlameError::Internal(format!("Failed to write batch: {}", e)))?;
-    writer
-        .finish()
-        .map_err(|e| FlameError::Internal(format!("Failed to finish writer: {}", e)))?;
-    Ok(())
 }
 
 // Helper function to create a RecordBatch from object data
@@ -1419,23 +1021,9 @@ pub async fn run(cache_config: &FlameCache) -> Result<(), FlameError> {
     let endpoint = CacheEndpoint::try_from(cache_config)?;
     let address_str = format!("{}:{}", endpoint.host, endpoint.port);
 
-    // Get storage path from config or environment variable
-    let storage_path = if let Some(ref path) = cache_config.storage {
-        Some(PathBuf::from(path))
-    } else if let Ok(path) = std::env::var("FLAME_CACHE_STORAGE") {
-        Some(PathBuf::from(path))
-    } else {
-        None
-    };
+    let storage_url = cache_config.storage.as_deref().unwrap_or("none");
+    let storage = crate::storage::connect(storage_url).await?;
 
-    if let Some(ref path) = storage_path {
-        tracing::info!("Using storage path: {:?}", path);
-    } else {
-        tracing::warn!("No storage path configured - cache will not persist");
-    }
-
-    // Create eviction config from FlameCache.eviction
-    // Environment variables can still override config values (handled in new_policy)
     let eviction_config = EvictionConfig {
         policy: Some(cache_config.eviction.policy.clone()),
         max_memory: Some(ByteSize::b(cache_config.eviction.max_memory).to_string()),
@@ -1451,9 +1039,12 @@ pub async fn run(cache_config: &FlameCache) -> Result<(), FlameError> {
 
     let cache = Arc::new(ObjectCache::new(
         endpoint.clone(),
-        storage_path,
+        storage,
         Some(&eviction_config),
     )?);
+
+    cache.load_from_storage().await?;
+
     let server = FlightCacheServer::new(Arc::clone(&cache));
 
     tracing::info!("Starting Arrow Flight cache server at {}", address_str);
@@ -1464,7 +1055,6 @@ pub async fn run(cache_config: &FlameCache) -> Result<(), FlameError> {
 
     let mut builder = tonic::transport::Server::builder();
 
-    // Apply TLS if cache endpoint requires it (grpcs:// scheme) and TLS is configured
     if cache_config.requires_tls() {
         let tls_config = cache_config.tls.as_ref().ok_or_else(|| {
             FlameError::InvalidConfig(
@@ -1487,4 +1077,375 @@ pub async fn run(cache_config: &FlameCache) -> Result<(), FlameError> {
         .map_err(|e| FlameError::Internal(format!("Server error: {}", e)))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod validation {
+        use super::*;
+
+        #[test]
+        fn validate_key_accepts_valid_keys() {
+            assert!(validate_key("session1/object1").is_ok());
+            assert!(validate_key("abc/def").is_ok());
+            assert!(validate_key("test-session/test-object").is_ok());
+            assert!(validate_key("123/456").is_ok());
+        }
+
+        #[test]
+        fn validate_key_rejects_path_traversal() {
+            assert!(validate_key("../etc/passwd").is_err());
+            assert!(validate_key("session/../other").is_err());
+            assert!(validate_key("session/..").is_err());
+        }
+
+        #[test]
+        fn validate_key_rejects_leading_slash() {
+            assert!(validate_key("/absolute/path").is_err());
+        }
+
+        #[test]
+        fn validate_key_rejects_double_slash() {
+            assert!(validate_key("session//object").is_err());
+        }
+
+        #[test]
+        fn validate_session_id_accepts_valid_ids() {
+            assert!(validate_session_id("session1").is_ok());
+            assert!(validate_session_id("my-session").is_ok());
+            assert!(validate_session_id("test_session_123").is_ok());
+        }
+
+        #[test]
+        fn validate_session_id_rejects_path_traversal() {
+            assert!(validate_session_id("..").is_err());
+            assert!(validate_session_id("../etc").is_err());
+            assert!(validate_session_id("test/path").is_err());
+            assert!(validate_session_id("test\\path").is_err());
+        }
+
+        #[test]
+        fn validate_object_id_accepts_valid_ids() {
+            assert!(validate_object_id("object1").is_ok());
+            assert!(validate_object_id("my-object").is_ok());
+            assert!(validate_object_id("550e8400-e29b-41d4-a716-446655440000").is_ok());
+        }
+
+        #[test]
+        fn validate_object_id_rejects_path_traversal() {
+            assert!(validate_object_id("..").is_err());
+            assert!(validate_object_id("../etc").is_err());
+            assert!(validate_object_id("test/path").is_err());
+            assert!(validate_object_id("test\\path").is_err());
+        }
+    }
+
+    mod object_struct {
+        use super::*;
+
+        #[test]
+        fn new_creates_object_without_deltas() {
+            let obj = Object::new(1, vec![1, 2, 3]);
+            assert_eq!(obj.version, 1);
+            assert_eq!(obj.data, vec![1, 2, 3]);
+            assert!(obj.deltas.is_empty());
+        }
+
+        #[test]
+        fn with_deltas_creates_object_with_deltas() {
+            let delta1 = Object::new(1, vec![4, 5]);
+            let delta2 = Object::new(2, vec![6, 7]);
+            let obj = Object::with_deltas(0, vec![1, 2, 3], vec![delta1.clone(), delta2.clone()]);
+
+            assert_eq!(obj.version, 0);
+            assert_eq!(obj.data, vec![1, 2, 3]);
+            assert_eq!(obj.deltas.len(), 2);
+            assert_eq!(obj.deltas[0].data, vec![4, 5]);
+            assert_eq!(obj.deltas[1].data, vec![6, 7]);
+        }
+
+        #[test]
+        fn object_clone_works() {
+            let obj = Object::new(42, vec![10, 20, 30]);
+            let cloned = obj.clone();
+            assert_eq!(cloned.version, obj.version);
+            assert_eq!(cloned.data, obj.data);
+        }
+    }
+
+    mod cache_endpoint {
+        use super::*;
+
+        #[test]
+        fn to_uri_formats_grpc_scheme() {
+            let endpoint = CacheEndpoint {
+                scheme: "grpc".to_string(),
+                host: "localhost".to_string(),
+                port: 9090,
+            };
+            assert_eq!(endpoint.to_uri(), "grpc://localhost:9090");
+        }
+
+        #[test]
+        fn to_uri_converts_grpcs_to_grpc_tls() {
+            let endpoint = CacheEndpoint {
+                scheme: "grpcs".to_string(),
+                host: "example.com".to_string(),
+                port: 443,
+            };
+            assert_eq!(endpoint.to_uri(), "grpc+tls://example.com:443");
+        }
+
+        #[test]
+        fn try_from_string_parses_valid_endpoint() {
+            let endpoint_str = "grpc://localhost:9090".to_string();
+            let endpoint = CacheEndpoint::try_from(&endpoint_str).unwrap();
+            assert_eq!(endpoint.scheme, "grpc");
+            assert_eq!(endpoint.host, "localhost");
+            assert_eq!(endpoint.port, 9090);
+        }
+
+        #[test]
+        fn try_from_string_uses_default_port() {
+            let endpoint_str = "grpc://localhost".to_string();
+            let endpoint = CacheEndpoint::try_from(&endpoint_str).unwrap();
+            assert_eq!(endpoint.port, 9090);
+        }
+
+        #[test]
+        fn try_from_string_rejects_invalid_url() {
+            let endpoint_str = "not a valid url".to_string();
+            assert!(CacheEndpoint::try_from(&endpoint_str).is_err());
+        }
+
+        #[test]
+        fn try_from_string_rejects_missing_host() {
+            let endpoint_str = "grpc:///path".to_string();
+            assert!(CacheEndpoint::try_from(&endpoint_str).is_err());
+        }
+    }
+
+    mod object_batch_conversion {
+        use super::*;
+
+        #[test]
+        fn object_to_batch_and_back() {
+            let original = Object::new(42, vec![1, 2, 3, 4, 5]);
+            let batch = object_to_batch(&original).unwrap();
+
+            assert_eq!(batch.num_rows(), 1);
+            assert_eq!(batch.num_columns(), 2);
+
+            let recovered = batch_to_object(&batch).unwrap();
+            assert_eq!(recovered.version, original.version);
+            assert_eq!(recovered.data, original.data);
+            assert!(recovered.deltas.is_empty());
+        }
+
+        #[test]
+        fn object_to_batch_handles_empty_data() {
+            let obj = Object::new(0, vec![]);
+            let batch = object_to_batch(&obj).unwrap();
+            let recovered = batch_to_object(&batch).unwrap();
+            assert_eq!(recovered.version, 0);
+            assert!(recovered.data.is_empty());
+        }
+
+        #[test]
+        fn object_to_batch_handles_large_data() {
+            let large_data: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
+            let obj = Object::new(999, large_data.clone());
+            let batch = object_to_batch(&obj).unwrap();
+            let recovered = batch_to_object(&batch).unwrap();
+            assert_eq!(recovered.version, 999);
+            assert_eq!(recovered.data, large_data);
+        }
+
+        #[test]
+        fn get_object_schema_returns_correct_schema() {
+            let schema = get_object_schema();
+            assert_eq!(schema.fields().len(), 2);
+            assert_eq!(schema.field(0).name(), "version");
+            assert_eq!(schema.field(1).name(), "data");
+        }
+    }
+
+    mod object_cache_operations {
+        use super::*;
+
+        async fn create_test_cache() -> ObjectCache {
+            let endpoint = CacheEndpoint {
+                scheme: "grpc".to_string(),
+                host: "localhost".to_string(),
+                port: 9090,
+            };
+            let storage = crate::storage::connect("none").await.unwrap();
+            ObjectCache::new(endpoint, storage, None).unwrap()
+        }
+
+        #[tokio::test]
+        async fn put_and_get_object() {
+            let cache = create_test_cache().await;
+            let obj = Object::new(1, vec![1, 2, 3]);
+
+            let meta = cache
+                .put("test-session".to_string(), obj.clone())
+                .await
+                .unwrap();
+            assert!(meta.key.starts_with("test-session/"));
+            assert_eq!(meta.size, 3);
+
+            let retrieved = cache.get(meta.key.clone()).await.unwrap();
+            assert_eq!(retrieved.version, 1);
+            assert_eq!(retrieved.data, vec![1, 2, 3]);
+        }
+
+        #[tokio::test]
+        async fn put_with_custom_id() {
+            let cache = create_test_cache().await;
+            let obj = Object::new(0, vec![42]);
+
+            let meta = cache
+                .put_with_id("session".to_string(), Some("custom-id".to_string()), obj)
+                .await
+                .unwrap();
+
+            assert_eq!(meta.key, "session/custom-id");
+        }
+
+        #[tokio::test]
+        async fn get_returns_not_found_for_missing_key() {
+            let cache = create_test_cache().await;
+            let result = cache.get("nonexistent/key".to_string()).await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn get_rejects_invalid_key() {
+            let cache = create_test_cache().await;
+            let result = cache.get("../invalid".to_string()).await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn update_replaces_object() {
+            let cache = create_test_cache().await;
+            let obj1 = Object::new(1, vec![1, 2, 3]);
+
+            let meta = cache.put("session".to_string(), obj1).await.unwrap();
+
+            let obj2 = Object::new(2, vec![4, 5, 6, 7]);
+            let updated_meta = cache.update(meta.key.clone(), obj2).await.unwrap();
+
+            assert_eq!(updated_meta.size, 4);
+
+            let retrieved = cache.get(meta.key).await.unwrap();
+            assert_eq!(retrieved.version, 2);
+            assert_eq!(retrieved.data, vec![4, 5, 6, 7]);
+        }
+
+        #[tokio::test]
+        async fn delete_removes_session_objects() {
+            let cache = create_test_cache().await;
+
+            cache
+                .put("session-to-delete".to_string(), Object::new(0, vec![1]))
+                .await
+                .unwrap();
+            cache
+                .put("session-to-delete".to_string(), Object::new(0, vec![2]))
+                .await
+                .unwrap();
+            cache
+                .put("other-session".to_string(), Object::new(0, vec![3]))
+                .await
+                .unwrap();
+
+            cache.delete("session-to-delete".to_string()).await.unwrap();
+
+            let all = cache.list_all().await.unwrap();
+            assert_eq!(all.len(), 1);
+            assert!(all[0].key.starts_with("other-session/"));
+        }
+
+        #[tokio::test]
+        async fn list_all_returns_all_metadata() {
+            let cache = create_test_cache().await;
+
+            cache
+                .put("s1".to_string(), Object::new(0, vec![1]))
+                .await
+                .unwrap();
+            cache
+                .put("s2".to_string(), Object::new(0, vec![2]))
+                .await
+                .unwrap();
+
+            let all = cache.list_all().await.unwrap();
+            assert_eq!(all.len(), 2);
+        }
+
+        #[tokio::test]
+        async fn put_rejects_invalid_session_id() {
+            let cache = create_test_cache().await;
+            let result = cache
+                .put("../bad".to_string(), Object::new(0, vec![]))
+                .await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn put_with_id_rejects_invalid_object_id() {
+            let cache = create_test_cache().await;
+            let result = cache
+                .put_with_id(
+                    "session".to_string(),
+                    Some("../bad".to_string()),
+                    Object::new(0, vec![]),
+                )
+                .await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn create_metadata_includes_endpoint() {
+            let cache = create_test_cache().await;
+            let meta = cache.create_metadata("test/key".to_string(), 100, 5);
+
+            assert_eq!(meta.key, "test/key");
+            assert_eq!(meta.size, 100);
+            assert_eq!(meta.delta_count, 5);
+            assert!(meta.endpoint.contains("localhost:9090"));
+        }
+    }
+
+    mod flight_data_conversion {
+        use super::*;
+
+        #[test]
+        fn object_to_flight_data_vec_creates_valid_flight_data() {
+            let obj = Object::new(1, vec![1, 2, 3]);
+            let flight_data = object_to_flight_data_vec(&obj).unwrap();
+
+            assert!(!flight_data.is_empty());
+        }
+
+        #[test]
+        fn object_to_flight_data_vec_includes_deltas() {
+            let delta = Object::new(1, vec![4, 5]);
+            let obj = Object::with_deltas(0, vec![1, 2, 3], vec![delta]);
+            let flight_data = object_to_flight_data_vec(&obj).unwrap();
+
+            assert!(flight_data.len() >= 2);
+        }
+
+        #[test]
+        fn encode_schema_returns_valid_bytes() {
+            let schema = get_object_schema();
+            let encoded = encode_schema(&schema).unwrap();
+            assert!(!encoded.is_empty());
+        }
+    }
 }
