@@ -13,8 +13,10 @@ limitations under the License.
 
 pub mod cache;
 pub mod eviction;
+pub mod storage;
 
 pub use cache::{run, CacheEndpoint, FlightCacheServer, Object, ObjectCache, ObjectMetadata};
 pub use eviction::{
     new_policy, EvictionConfig, EvictionPolicy, EvictionPolicyPtr, LRUPolicy, NoEvictionPolicy,
 };
+pub use storage::{connect as connect_storage, StorageEngine, StorageEnginePtr};
