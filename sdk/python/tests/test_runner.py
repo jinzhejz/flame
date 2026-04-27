@@ -1,12 +1,6 @@
-import os
-import tarfile
-import tempfile
-from datetime import datetime, timezone
 
-import pyarrow as pa  # type: ignore
 
-import flamepy.runner.storage as storage
-from flamepy.runner.storage import FileStorage, HttpStorage, create_storage_backend
+from flamepy.runner.storage import FileStorage, create_storage_backend
 
 
 def test_file_storage_basic(tmp_path):

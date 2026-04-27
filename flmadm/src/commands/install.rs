@@ -237,7 +237,11 @@ fn install_components(
         paths,
         &config.profiles,
         config.force_overwrite,
+        &config.python_version,
     )?;
+
+    // Generate environment script
+    installation_manager.generate_env_script(paths, &config.python_version)?;
 
     // Install database migrations
     installation_manager.install_migrations(src_dir, paths, &config.profiles)?;
@@ -307,13 +311,12 @@ fn print_summary(paths: &InstallationPaths, config: &InstallConfig) {
         paths.conf.join("flame-cluster.yaml").display()
     );
 
-    // Only show SDK path if it was installed
     let has_flamepy = config
         .profiles
         .iter()
         .any(|p| p.includes_component("flamepy"));
     if has_flamepy {
-        println!("  • Python SDK: {}", paths.sdk_python.display());
+        println!("  • Python libs: {}", paths.lib.display());
     }
     println!();
 
@@ -385,12 +388,12 @@ fn print_summary(paths: &InstallationPaths, config: &InstallConfig) {
         "  1. Review configuration: {}/conf/flame-cluster.yaml",
         paths.prefix.display()
     );
-    println!("  2. Add {}/bin to your PATH", paths.bin.display());
+    println!("  2. Add {} to your PATH", paths.bin.display());
 
     // Provide relevant test command based on what was installed
     if has_control_plane {
         println!(
-            "  3. Test the installation: {}/bin/flmctl --version",
+            "  3. Test the installation: {}/flmctl --version",
             paths.bin.display()
         );
     } else if config
@@ -398,7 +401,7 @@ fn print_summary(paths: &InstallationPaths, config: &InstallConfig) {
         .contains(&crate::types::InstallProfile::Client)
     {
         println!(
-            "  3. Test the installation: {}/bin/flmping --version",
+            "  3. Test the installation: {}/flmping --version",
             paths.bin.display()
         );
     }

@@ -123,6 +123,7 @@ impl From<ApplicationContext> for rpc::ApplicationContext {
             command: ctx.command.clone(),
             working_directory: ctx.working_directory.clone(),
             url: ctx.url.clone(),
+            installer: ctx.installer.clone(),
         }
     }
 }
@@ -242,6 +243,7 @@ impl From<&Application> for rpc::Application {
             delay_release: Some(app.delay_release.num_seconds()),
             schema: app.schema.clone().map(rpc::ApplicationSchema::from),
             url: app.url.clone(),
+            installer: app.installer.clone(),
         });
         let metadata = Some(rpc::Metadata {
             id: app.name.clone(),

@@ -21,8 +21,6 @@ from urllib.parse import urlparse
 
 import grpc
 
-from typing import Callable
-
 from flamepy.core.types import (
     Application,
     ApplicationAttributes,
@@ -173,6 +171,21 @@ class Connection:
         self._frontend = frontend
         self._executor = ThreadPoolExecutor(max_workers=10)
 
+    @staticmethod
+    def _grpc_error_to_flame_error(e: grpc.RpcError, operation: str) -> FlameError:
+        code = e.code()
+        details = e.details() or ""
+        if code == grpc.StatusCode.NOT_FOUND:
+            return FlameError(FlameErrorCode.NOT_FOUND, f"{operation}: {details}")
+        elif code == grpc.StatusCode.ALREADY_EXISTS:
+            return FlameError(FlameErrorCode.ALREADY_EXISTS, f"{operation}: {details}")
+        elif code == grpc.StatusCode.INVALID_ARGUMENT:
+            return FlameError(FlameErrorCode.INVALID_ARGUMENT, f"{operation}: {details}")
+        elif code == grpc.StatusCode.FAILED_PRECONDITION:
+            return FlameError(FlameErrorCode.INVALID_STATE, f"{operation}: {details}")
+        else:
+            return FlameError(FlameErrorCode.INTERNAL, f"{operation}: {details}")
+
     @classmethod
     def connect(cls, addr: str, tls_config: Optional[FlameClientTls] = None) -> "Connection":
         """Establish a connection to the Flame service.
@@ -275,6 +288,7 @@ class Connection:
             delay_release=app_attrs.delay_release,
             schema=schema,
             url=app_attrs.url,
+            installer=app_attrs.installer,
         )
 
         request = RegisterApplicationRequest(name=name, application=app_spec)
@@ -336,6 +350,7 @@ class Connection:
                         delay_release=app.spec.delay_release,
                         schema=schema,
                         url=app.spec.url if app.spec.HasField("url") else None,
+                        installer=app.spec.installer if app.spec.HasField("installer") else None,
                     )
                 )
 
@@ -378,6 +393,7 @@ class Connection:
                 delay_release=response.spec.delay_release,
                 schema=schema,
                 url=response.spec.url if response.spec.HasField("url") else None,
+                installer=response.spec.installer if response.spec.HasField("installer") else None,
             )
 
         except grpc.RpcError as e:
@@ -508,7 +524,7 @@ class Connection:
             )
 
         except grpc.RpcError as e:
-            raise FlameError(FlameErrorCode.INTERNAL, f"failed to open session: {e.details()}")
+            raise self._grpc_error_to_flame_error(e, "failed to open session")
 
     def get_session(self, session_id: SessionID) -> "Session":
         """Get a session by ID."""

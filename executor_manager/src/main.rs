@@ -18,6 +18,7 @@ use tokio::runtime::{Builder, Runtime};
 use common::ctx::FlameClusterContext;
 use common::FlameError;
 
+mod appmgr;
 mod client;
 mod executor;
 mod manager;

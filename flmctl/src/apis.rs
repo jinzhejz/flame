@@ -48,6 +48,7 @@ pub struct SpecYaml {
     pub delay_release: Option<i64>,
     pub schema: Option<SchemaYaml>,
     pub url: Option<String>,
+    pub installer: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +85,7 @@ impl TryFrom<&ApplicationYaml> for ApplicationAttributes {
             delay_release: yaml.spec.delay_release.map(Duration::seconds),
             schema: yaml.spec.schema.clone().map(ApplicationSchema::from),
             url: yaml.spec.url.clone(),
+            installer: yaml.spec.installer.clone(),
         })
     }
 }

@@ -3,8 +3,9 @@
 Example usage of the Flame Python SDK.
 """
 
-import flamepy
 from concurrent.futures import wait
+
+import flamepy
 
 
 class MyTaskInformer(flamepy.TaskInformer):
@@ -41,7 +42,7 @@ def main():
     # Run multiple tasks in parallel
     print("\n4. Running multiple tasks in parallel...")
     futures = [session.run(f"parallel task {i}".encode()) for i in range(5)]
-    
+
     # Wait for all tasks to complete
     wait(futures)
     results = [f.result() for f in futures]
@@ -49,13 +50,14 @@ def main():
 
     # Run tasks with callbacks
     print("\n5. Running task with callback...")
+
     def task_done(future):
         try:
             result = future.result()
             print(f"Callback: Task completed with result: {result}")
         except Exception as e:
             print(f"Callback: Task failed with error: {e}")
-    
+
     future = session.run(b"callback task input")
     future.add_done_callback(task_done)
     future.result()  # Wait for completion

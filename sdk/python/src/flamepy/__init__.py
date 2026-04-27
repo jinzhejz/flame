@@ -11,6 +11,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+# ruff: noqa: E402, I001
+# isort: skip_file
+
+# Import proto module first to ensure types_pb2 is loaded before frontend_pb2
+from flamepy import proto  # noqa: F401
+
 # Import submodules for runner, agent, and util (only as submodules)
 from . import agent, runner, util
 

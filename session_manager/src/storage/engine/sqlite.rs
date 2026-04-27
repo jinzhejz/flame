@@ -257,9 +257,10 @@ impl Engine for SqliteEngine {
                 delay_release, 
                 schema, 
                 url,
+                installer,
                 creation_time, 
                 state)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *"#;
         let app: ApplicationDao = sqlx::query_as(sql)
             .bind(name)
@@ -273,6 +274,7 @@ impl Engine for SqliteEngine {
             .bind(attr.delay_release.num_seconds())
             .bind(schema)
             .bind(attr.url)
+            .bind(attr.installer)
             .bind(Utc::now().timestamp())
             .bind(ApplicationState::Enabled as i32)
             .fetch_one(&mut *tx)
@@ -320,6 +322,7 @@ impl Engine for SqliteEngine {
                         max_instances=?,
                         delay_release=?,
                         url=?,
+                        installer=?,
                         version=version+1
                     WHERE name=?
                     RETURNING *"#;
@@ -335,6 +338,7 @@ impl Engine for SqliteEngine {
             .bind(attr.max_instances)
             .bind(attr.delay_release.num_seconds())
             .bind(attr.url)
+            .bind(attr.installer)
             .bind(name)
             .fetch_one(&mut *tx)
             .await
@@ -1229,6 +1233,7 @@ mod tests {
                 delay_release: Duration::seconds(0),
                 schema: None,
                 url: None,
+                installer: None,
             },
         ))?;
         assert_eq!(app_2.name, "flmexec");
@@ -1342,6 +1347,7 @@ mod tests {
                         common_data: None,
                     }),
                     url: None,
+                    installer: None,
                 },
             ),
             (
@@ -1359,6 +1365,7 @@ mod tests {
                     delay_release: Duration::seconds(0),
                     schema: None,
                     url: None,
+                    installer: None,
                 },
             ),
         ];
@@ -1422,6 +1429,7 @@ mod tests {
                 delay_release: Duration::seconds(10),
                 schema: None,
                 url: Some(test_url.clone()),
+                installer: None,
             },
         ))?;
 
@@ -1469,6 +1477,7 @@ mod tests {
                 delay_release: Duration::seconds(10),
                 schema: None,
                 url: None,
+                installer: None,
             },
         ))?;
 
@@ -1512,6 +1521,7 @@ mod tests {
                 delay_release: Duration::seconds(10),
                 schema: None,
                 url: None,
+                installer: None,
             },
         ))?;
 
@@ -1536,6 +1546,7 @@ mod tests {
                 delay_release: Duration::seconds(20),
                 schema: None,
                 url: Some(test_url.clone()),
+                installer: None,
             },
         ))?;
 

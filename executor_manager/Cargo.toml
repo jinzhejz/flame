@@ -31,6 +31,11 @@ serde_json = { workspace = true }
 serde_derive = { workspace = true }
 
 bytes = { workspace = true }
+flate2 = "1"
+tar = "0.4"
+zip = "2"
+reqwest = { version = "0.12", features = ["rustls-tls", "stream"], default-features = false }
+futures-util = "0.3"
 wasmtime = "43"
 wasmtime-wasi = "43"
 anyhow = "1"

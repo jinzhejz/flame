@@ -113,6 +113,7 @@ message ApplicationSpec {
   optional int64 delay_release = 10;
   optional ApplicationSchema schema = 11;
   optional string url = 12;
+  optional string installer = 13;
 }
 
 message Application {

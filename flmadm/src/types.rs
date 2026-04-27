@@ -29,6 +29,8 @@ impl InstallProfile {
     }
 }
 
+pub const DEFAULT_PYTHON_VERSION: &str = "3.12";
+
 /// Configuration for the install command
 #[derive(Debug, Clone)]
 pub struct InstallConfig {
@@ -41,6 +43,7 @@ pub struct InstallConfig {
     pub verbose: bool,
     pub profiles: Vec<InstallProfile>,
     pub force_overwrite: bool,
+    pub python_version: String,
 }
 
 impl Default for InstallConfig {
@@ -59,6 +62,7 @@ impl Default for InstallConfig {
                 InstallProfile::Client,
             ],
             force_overwrite: false,
+            python_version: DEFAULT_PYTHON_VERSION.to_string(),
         }
     }
 }
@@ -94,7 +98,8 @@ impl Default for UninstallConfig {
 pub struct InstallationPaths {
     pub prefix: PathBuf,
     pub bin: PathBuf,
-    pub sdk_python: PathBuf,
+    pub sbin: PathBuf,
+    pub lib: PathBuf,
     pub wheels: PathBuf,
     pub work: PathBuf,
     pub logs: PathBuf,
@@ -108,7 +113,8 @@ impl InstallationPaths {
     pub fn new(prefix: PathBuf) -> Self {
         Self {
             bin: prefix.join("bin"),
-            sdk_python: prefix.join("sdk/python"),
+            sbin: prefix.join("sbin"),
+            lib: prefix.join("lib"),
             wheels: prefix.join("wheels"),
             work: prefix.join("work"),
             logs: prefix.join("logs"),
@@ -179,4 +185,207 @@ impl BuildArtifacts {
 pub mod exit_codes {
     pub const SUCCESS: i32 = 0;
     pub const INSTALL_FAILURE: i32 = 3;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    mod install_profile {
+        use super::*;
+
+        #[test]
+        fn control_plane_components() {
+            let profile = InstallProfile::ControlPlane;
+            let components = profile.components();
+            assert!(components.contains(&"flame-session-manager"));
+            assert!(components.contains(&"flmctl"));
+            assert!(components.contains(&"flmadm"));
+            assert!(!components.contains(&"flamepy"));
+        }
+
+        #[test]
+        fn worker_components() {
+            let profile = InstallProfile::Worker;
+            let components = profile.components();
+            assert!(components.contains(&"flame-executor-manager"));
+            assert!(components.contains(&"flmping-service"));
+            assert!(components.contains(&"flmexec-service"));
+            assert!(components.contains(&"flamepy"));
+        }
+
+        #[test]
+        fn client_components() {
+            let profile = InstallProfile::Client;
+            let components = profile.components();
+            assert!(components.contains(&"flmctl"));
+            assert!(components.contains(&"flmping"));
+            assert!(components.contains(&"flmexec"));
+            assert!(components.contains(&"flamepy"));
+        }
+
+        #[test]
+        fn includes_component_true() {
+            assert!(InstallProfile::ControlPlane.includes_component("flmctl"));
+            assert!(InstallProfile::Worker.includes_component("flamepy"));
+            assert!(InstallProfile::Client.includes_component("flmexec"));
+        }
+
+        #[test]
+        fn includes_component_false() {
+            assert!(!InstallProfile::ControlPlane.includes_component("flamepy"));
+            assert!(!InstallProfile::Worker.includes_component("flmadm"));
+            assert!(!InstallProfile::Client.includes_component("flame-session-manager"));
+        }
+    }
+
+    mod install_config {
+        use super::*;
+
+        #[test]
+        fn default_python_version() {
+            let config = InstallConfig::default();
+            assert_eq!(config.python_version, "3.12");
+        }
+
+        #[test]
+        fn default_prefix() {
+            let config = InstallConfig::default();
+            assert_eq!(config.prefix, PathBuf::from("/usr/local/flame"));
+        }
+
+        #[test]
+        fn default_profiles_include_all() {
+            let config = InstallConfig::default();
+            assert_eq!(config.profiles.len(), 3);
+            assert!(config.profiles.contains(&InstallProfile::ControlPlane));
+            assert!(config.profiles.contains(&InstallProfile::Worker));
+            assert!(config.profiles.contains(&InstallProfile::Client));
+        }
+
+        #[test]
+        fn default_flags() {
+            let config = InstallConfig::default();
+            assert!(config.systemd);
+            assert!(!config.enable);
+            assert!(!config.skip_build);
+            assert!(!config.clean);
+            assert!(!config.verbose);
+            assert!(!config.force_overwrite);
+            assert!(config.src_dir.is_none());
+        }
+
+        #[test]
+        fn custom_python_version() {
+            let config = InstallConfig {
+                python_version: "3.11".to_string(),
+                ..Default::default()
+            };
+            assert_eq!(config.python_version, "3.11");
+        }
+    }
+
+    mod uninstall_config {
+        use super::*;
+
+        #[test]
+        fn default_prefix() {
+            let config = UninstallConfig::default();
+            assert_eq!(config.prefix, PathBuf::from("/usr/local/flame"));
+        }
+
+        #[test]
+        fn default_preserve_flags() {
+            let config = UninstallConfig::default();
+            assert!(!config.preserve_data);
+            assert!(!config.preserve_config);
+            assert!(!config.preserve_logs);
+            assert!(!config.no_backup);
+            assert!(!config.force);
+            assert!(config.backup_dir.is_none());
+        }
+    }
+
+    mod installation_paths {
+        use super::*;
+
+        #[test]
+        fn new_creates_correct_paths() {
+            let prefix = PathBuf::from("/opt/flame");
+            let paths = InstallationPaths::new(prefix.clone());
+
+            assert_eq!(paths.prefix, prefix);
+            assert_eq!(paths.bin, prefix.join("bin"));
+            assert_eq!(paths.sbin, prefix.join("sbin"));
+            assert_eq!(paths.lib, prefix.join("lib"));
+            assert_eq!(paths.wheels, prefix.join("wheels"));
+            assert_eq!(paths.work, prefix.join("work"));
+            assert_eq!(paths.logs, prefix.join("logs"));
+            assert_eq!(paths.conf, prefix.join("conf"));
+            assert_eq!(paths.data, prefix.join("data"));
+            assert_eq!(paths.cache, prefix.join("data/cache"));
+            assert_eq!(paths.migrations, prefix.join("migrations"));
+        }
+
+        #[test]
+        fn is_valid_installation_nonexistent() {
+            let paths = InstallationPaths::new(PathBuf::from("/nonexistent/path"));
+            assert!(!paths.is_valid_installation());
+        }
+
+        #[test]
+        fn is_valid_installation_with_bin() {
+            let temp = tempdir().unwrap();
+            let prefix = temp.path().to_path_buf();
+            std::fs::create_dir_all(prefix.join("bin")).unwrap();
+
+            let paths = InstallationPaths::new(prefix);
+            assert!(paths.is_valid_installation());
+        }
+
+        #[test]
+        fn is_valid_installation_with_conf() {
+            let temp = tempdir().unwrap();
+            let prefix = temp.path().to_path_buf();
+            std::fs::create_dir_all(prefix.join("conf")).unwrap();
+
+            let paths = InstallationPaths::new(prefix);
+            assert!(paths.is_valid_installation());
+        }
+
+        #[test]
+        fn is_valid_installation_with_data() {
+            let temp = tempdir().unwrap();
+            let prefix = temp.path().to_path_buf();
+            std::fs::create_dir_all(prefix.join("data")).unwrap();
+
+            let paths = InstallationPaths::new(prefix);
+            assert!(paths.is_valid_installation());
+        }
+
+        #[test]
+        fn is_valid_installation_empty_prefix() {
+            let temp = tempdir().unwrap();
+            let prefix = temp.path().to_path_buf();
+
+            let paths = InstallationPaths::new(prefix);
+            assert!(!paths.is_valid_installation());
+        }
+    }
+
+    mod constants {
+        use super::*;
+
+        #[test]
+        fn default_python_version_value() {
+            assert_eq!(DEFAULT_PYTHON_VERSION, "3.12");
+        }
+
+        #[test]
+        fn exit_codes() {
+            assert_eq!(exit_codes::SUCCESS, 0);
+            assert_eq!(exit_codes::INSTALL_FAILURE, 3);
+        }
+    }
 }

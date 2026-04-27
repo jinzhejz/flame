@@ -15,6 +15,7 @@ mod grpc_shim;
 mod host_shim;
 mod wasm_shim;
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -186,7 +187,11 @@ impl Drop for ExecutorWorkDir {
 /// Create a new shim instance based on executor's cluster context configuration.
 /// The shim type is determined by the executor-manager's flame-cluster.yaml config,
 /// not from the application context (which is deprecated).
-pub async fn new(executor: &Executor, app: &ApplicationContext) -> Result<ShimPtr, FlameError> {
+pub async fn new(
+    executor: &Executor,
+    app: &ApplicationContext,
+    install_env_vars: &HashMap<String, String>,
+) -> Result<ShimPtr, FlameError> {
     // Get shim type from executor's cluster context configuration
     let shim_type = executor
         .context
@@ -201,8 +206,8 @@ pub async fn new(executor: &Executor, app: &ApplicationContext) -> Result<ShimPt
     );
 
     match shim_type {
-        ShimType::Wasm => Ok(WasmShim::new_ptr(executor, app).await?),
-        ShimType::Host => Ok(HostShim::new_ptr(executor, app).await?),
+        ShimType::Wasm => Ok(WasmShim::new_ptr(executor, app, install_env_vars).await?),
+        ShimType::Host => Ok(HostShim::new_ptr(executor, app, install_env_vars).await?),
     }
 }
 
@@ -233,6 +238,7 @@ mod tests {
             working_directory,
             environments: HashMap::new(),
             url: None,
+            installer: None,
         }
     }
 

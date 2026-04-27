@@ -83,6 +83,10 @@ enum Commands {
         /// Show detailed build output
         #[arg(long)]
         verbose: bool,
+
+        /// Python version for SDK installation
+        #[arg(long, default_value = types::DEFAULT_PYTHON_VERSION)]
+        python_version: String,
     },
 
     /// Uninstall Flame from this machine
@@ -149,6 +153,7 @@ fn main() {
             clean,
             force,
             verbose,
+            python_version,
         } => {
             // Validate profile flags
             if all && (control_plane || worker || client) {
@@ -205,6 +210,7 @@ fn main() {
                 verbose,
                 profiles,
                 force_overwrite: force,
+                python_version,
             };
             commands::install::run(config)
         }

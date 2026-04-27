@@ -11,6 +11,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -46,6 +47,7 @@ impl WasmShim {
     pub async fn new_ptr(
         _: &Executor,
         app: &apis::ApplicationContext,
+        _install_env_vars: &HashMap<String, String>,
     ) -> Result<ShimPtr, common::FlameError> {
         trace_fn!("WasmShim::new_ptr");
 

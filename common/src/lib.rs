@@ -258,13 +258,7 @@ pub fn default_applications() -> HashMap<String, ApplicationAttributes> {
     // This will be expanded at runtime by the executor to the actual FLAME_HOME path
     let flmexec_cmd = "${FLAME_HOME}/bin/flmexec-service".to_string();
     let flmping_cmd = "${FLAME_HOME}/bin/flmping-service".to_string();
-    let uv_cmd = "${FLAME_HOME}/bin/uv".to_string();
     let flmping_url = "file://${FLAME_HOME}/bin/flmping-service".to_string();
-    // Use pre-built wheel from wheels directory to avoid rebuild on every run
-    // The wheel is built during installation via "flmadm install"
-    let flamepy_wheels_dir = "${FLAME_HOME}/wheels".to_string();
-    // Use the same cache directory that was populated during installation
-    let uv_cache_dir = "${FLAME_HOME}/data/cache/uv".to_string();
 
     HashMap::from([
         (
@@ -300,20 +294,9 @@ pub fn default_applications() -> HashMap<String, ApplicationAttributes> {
                     "The Flame Runner application for executing customized Python applications."
                         .to_string(),
                 ),
-                command: Some(uv_cmd),
-                arguments: vec![
-                    "run".to_string(),
-                    "--find-links".to_string(),
-                    flamepy_wheels_dir,
-                    "--with".to_string(),
-                    "pip".to_string(),
-                    "--with".to_string(),
-                    "flamepy".to_string(),
-                    "python".to_string(),
-                    "-m".to_string(),
-                    "flamepy.runner.runpy".to_string(),
-                ],
-                environments: HashMap::from([("UV_CACHE_DIR".to_string(), uv_cache_dir)]),
+                command: Some("python3".to_string()),
+                arguments: vec!["-m".to_string(), "flamepy.runner.runpy".to_string()],
+                installer: Some("python".to_string()),
                 working_directory: None,
                 ..ApplicationAttributes::default()
             },

@@ -229,6 +229,7 @@ mod tests {
             working_directory: None,
             environments: HashMap::new(),
             url: None,
+            installer: None,
         };
 
         ExecutorWorkDir::new(&app, executor_id).unwrap()
@@ -238,32 +239,26 @@ mod tests {
     fn test_grpc_shim_new() {
         let _guard = TEST_LOCK.lock().unwrap();
         let temp = tempdir().unwrap();
-        let socket_dir = setup_test_env(&temp);
+        setup_test_env(&temp);
         let work_dir = create_test_work_dir("exec-grpc-test", &temp);
 
         let shim = GrpcShim::new(&work_dir).unwrap();
 
         assert!(shim.client.is_none());
         assert!(shim.endpoint.contains("exec-grpc-test.sock"));
-        assert_eq!(
-            shim.endpoint,
-            socket_dir.join("exec-grpc-test.sock").to_string_lossy()
-        );
+        assert_eq!(shim.endpoint, work_dir.socket().to_string_lossy());
     }
 
     #[test]
     fn test_grpc_shim_endpoint() {
         let _guard = TEST_LOCK.lock().unwrap();
         let temp = tempdir().unwrap();
-        let socket_dir = setup_test_env(&temp);
+        setup_test_env(&temp);
         let work_dir = create_test_work_dir("exec-endpoint-test", &temp);
 
         let shim = GrpcShim::new(&work_dir).unwrap();
 
-        assert_eq!(
-            shim.endpoint(),
-            socket_dir.join("exec-endpoint-test.sock").to_string_lossy()
-        );
+        assert_eq!(shim.endpoint(), work_dir.socket().to_string_lossy());
     }
 
     #[test]
@@ -308,6 +303,7 @@ mod tests {
                 working_directory: None,
                 environments: HashMap::new(),
                 url: None,
+                installer: None,
             },
             slots: 1,
             common_data: None,

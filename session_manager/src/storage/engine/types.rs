@@ -58,6 +58,7 @@ pub struct ApplicationDao {
     pub delay_release: i64,
     pub schema: Option<Json<AppSchemaDao>>,
     pub url: Option<String>,
+    pub installer: Option<String>,
     pub creation_time: i64,
     pub state: i32,
 }
@@ -237,6 +238,7 @@ impl TryFrom<&ApplicationDao> for Application {
             delay_release: Duration::seconds(app.delay_release),
             schema: app.schema.clone().map(|arg| arg.0.into()),
             url: app.url.clone(),
+            installer: app.installer.clone(),
         })
     }
 }

@@ -1,7 +1,5 @@
-import cloudpickle
-import types
 
-import pytest
+import cloudpickle
 
 import flamepy.agent.client as agent_client
 

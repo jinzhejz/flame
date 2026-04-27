@@ -147,6 +147,7 @@ pub struct ApplicationAttributes {
     pub delay_release: Option<Duration>,
     pub schema: Option<ApplicationSchema>,
     pub url: Option<String>,
+    pub installer: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -734,6 +735,7 @@ impl From<ApplicationAttributes> for ApplicationSpec {
             delay_release: app.delay_release.map(|s| s.num_seconds()),
             schema: app.schema.clone().map(rpc::ApplicationSchema::from),
             url: app.url.clone(),
+            installer: app.installer.clone(),
         }
     }
 }
@@ -760,6 +762,7 @@ impl From<ApplicationSpec> for ApplicationAttributes {
             delay_release: app.delay_release.map(Duration::seconds),
             schema: app.schema.clone().map(ApplicationSchema::from),
             url: app.url.clone(),
+            installer: app.installer.clone(),
         }
     }
 }

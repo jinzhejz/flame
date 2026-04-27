@@ -18,6 +18,7 @@ impl InstallationManager {
 
         for (name, path) in [
             ("bin", &paths.bin),
+            ("sbin", &paths.sbin),
             // Note: sdk/python is created by install_python_sdk() to allow existence check
             ("work", &paths.work),
             ("work/sessions", &paths.work.join("sessions")),
@@ -147,15 +148,15 @@ impl InstallationManager {
         Ok(response == "y" || response == "yes")
     }
 
-    /// Install Python SDK
+    /// Install Python SDK using uv pip install --prefix
     pub fn install_python_sdk(
         &self,
         src_dir: &Path,
         paths: &InstallationPaths,
         profiles: &[InstallProfile],
         force_overwrite: bool,
+        python_version: &str,
     ) -> Result<()> {
-        // Check if any profile requires flamepy
         let components_to_install = self.get_components_to_install(profiles);
         if !components_to_install.iter().any(|c| c == "flamepy") {
             println!("⊘ Skipped Python SDK (not in selected profiles)");
@@ -169,11 +170,15 @@ impl InstallationManager {
             anyhow::bail!("Python SDK source not found at: {:?}", sdk_src);
         }
 
-        // Check if SDK already exists
-        if paths.sdk_python.exists() && !force_overwrite {
+        let lib_exists = paths.lib.exists()
+            && fs::read_dir(&paths.lib)
+                .map(|entries| entries.count() > 0)
+                .unwrap_or(false);
+
+        if lib_exists && !force_overwrite {
             print!(
-                "  ⚠️  Python SDK already exists at {}. Overwrite? [y/N]: ",
-                paths.sdk_python.display()
+                "  ⚠️  Python libs already exist at {}. Overwrite? [y/N]: ",
+                paths.lib.display()
             );
             io::stdout().flush()?;
 
@@ -185,188 +190,133 @@ impl InstallationManager {
                 println!("  ⊘ Skipped Python SDK (already exists)");
                 return Ok(());
             }
-
-            // Remove existing SDK before copying
-            if paths.sdk_python.exists() {
-                fs::remove_dir_all(&paths.sdk_python).context("Failed to remove existing SDK")?;
-            }
         }
 
-        // Copy SDK source to the installation directory, excluding development artifacts
-        self.copy_sdk_excluding_artifacts(&sdk_src, &paths.sdk_python)
-            .context("Failed to copy SDK to installation directory")?;
-
-        println!("  ✓ Copied Python SDK to: {}", paths.sdk_python.display());
-
-        // Build wheel for faster runtime loading
-        // uv always rebuilds local directory dependencies, but wheel files are cached
-        self.build_python_wheel(paths)?;
-
-        Ok(())
-    }
-
-    /// Build Python wheel from SDK source and pre-cache dependencies
-    fn build_python_wheel(&self, paths: &InstallationPaths) -> Result<()> {
-        println!("  📦 Building Python wheel...");
-
-        // Create wheels directory
-        fs::create_dir_all(&paths.wheels).context("Failed to create wheels directory")?;
-
-        // Find uv binary
         let uv_path = paths.bin.join("uv");
         if !uv_path.exists() {
-            println!("  ⚠️  uv not found, skipping wheel build (will build at runtime)");
-            return Ok(());
+            anyhow::bail!("uv not found at {}. Install uv first.", uv_path.display());
         }
 
-        // Build wheel using uv
-        let output = std::process::Command::new(&uv_path)
+        fs::create_dir_all(&paths.lib).context("Failed to create lib directory")?;
+
+        println!("  📦 Building Python wheel...");
+        fs::create_dir_all(&paths.wheels).context("Failed to create wheels directory")?;
+
+        let build_output = std::process::Command::new(&uv_path)
             .arg("build")
             .arg("--wheel")
             .arg("--out-dir")
             .arg(&paths.wheels)
-            .arg(&paths.sdk_python)
+            .arg(&sdk_src)
             .output()
             .context("Failed to execute uv build")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !build_output.status.success() {
+            let stderr = String::from_utf8_lossy(&build_output.stderr);
             anyhow::bail!("Failed to build wheel: {}", stderr);
         }
-
         println!("  ✓ Built wheel to: {}", paths.wheels.display());
 
-        // Pre-cache dependencies using uv's cache
-        // Use FLAME_HOME/data/cache/uv as the cache directory so it's available at runtime
-        println!("  📥 Caching dependencies...");
+        println!("  📥 Installing flamepy to lib...");
 
         let uv_cache_dir = paths.cache.join("uv");
-
-        // Phase 1: Cache flamepy and all its dependencies (grpcio, protobuf, cloudpickle, etc.)
-        // Using --target to a temp directory to populate the cache without needing a venv
-        let cache_target = paths.work.join(".flamepy-cache-target");
-        fs::create_dir_all(&cache_target)
-            .context("Failed to create temporary directory for caching")?;
+        fs::create_dir_all(&uv_cache_dir).context("Failed to create cache directory")?;
 
         let install_output = std::process::Command::new(&uv_path)
             .arg("pip")
             .arg("install")
-            .arg("--target")
-            .arg(&cache_target)
+            .arg("--python")
+            .arg(format!("python{}", python_version))
+            .arg("--prefix")
+            .arg(&paths.prefix)
             .arg("--find-links")
             .arg(&paths.wheels)
             .arg("flamepy")
-            .arg("pip") // Also cache pip as it's used by flmrun for user packages
             .env("UV_CACHE_DIR", &uv_cache_dir)
             .output()
             .context("Failed to execute uv pip install")?;
 
-        // Clean up target directory (we only needed to populate the cache)
-        let _ = fs::remove_dir_all(&cache_target);
-
         if !install_output.status.success() {
             let stderr = String::from_utf8_lossy(&install_output.stderr);
-            // Don't fail installation if caching fails (might be offline)
-            println!(
-                "  ⚠️  Failed to cache dependencies (will fetch at runtime): {}",
-                stderr.lines().next().unwrap_or(&stderr)
-            );
-        } else {
-            println!(
-                "  ✓ Cached flamepy and dependencies to: {}",
-                uv_cache_dir.display()
-            );
+            anyhow::bail!("Failed to install flamepy: {}", stderr);
         }
 
-        // Phase 2: Pre-warm uv's ephemeral environment cache by running the exact command
-        // that flmrun uses at startup. This ensures all packages are cached in the format
-        // that 'uv run --with' expects (which differs from 'uv pip install').
-        println!("  🔄 Pre-warming uv run cache...");
-
-        // Create a simple Python script that just exits successfully
-        let run_output = std::process::Command::new(&uv_path)
-            .arg("run")
-            .arg("--find-links")
-            .arg(&paths.wheels)
-            .arg("--with")
-            .arg("pip")
-            .arg("--with")
-            .arg("flamepy")
-            .arg("python")
-            .arg("-c")
-            .arg("import sys; sys.exit(0)")
-            .env("UV_CACHE_DIR", &uv_cache_dir)
-            .output()
-            .context("Failed to execute uv run warmup")?;
-
-        if !run_output.status.success() {
-            let stderr = String::from_utf8_lossy(&run_output.stderr);
-            println!(
-                "  ⚠️  Failed to pre-warm uv run cache (will warm at runtime): {}",
-                stderr.lines().next().unwrap_or(&stderr)
-            );
-        } else {
-            println!("  ✓ Pre-warmed uv run cache");
-        }
+        println!("  ✓ Installed flamepy to: {}", paths.lib.display());
 
         Ok(())
     }
 
-    /// Copy SDK directory while excluding development artifacts
-    fn copy_sdk_excluding_artifacts(&self, src: &Path, dst: &Path) -> Result<()> {
-        use walkdir::WalkDir;
+    /// Generate flmenv.sh script for environment setup
+    pub fn generate_env_script(
+        &self,
+        paths: &InstallationPaths,
+        python_version: &str,
+    ) -> Result<()> {
+        println!("📜 Generating environment script...");
 
-        let exclude_patterns = [
-            ".venv",
-            "__pycache__",
-            ".pytest_cache",
-            ".pyc",
-            ".pyo",
-            ".eggs",
-            ".egg-info",
-            ".tox",
-            ".coverage",
-            ".mypy_cache",
-            ".ruff_cache",
-            "build",
-            "dist",
-        ];
+        let env_script_path = paths.sbin.join("flmenv.sh");
 
-        fs::create_dir_all(dst).context("Failed to create destination directory")?;
+        let site_packages = paths
+            .lib
+            .join(format!("python{}", python_version))
+            .join("site-packages");
 
-        for entry in WalkDir::new(src).into_iter().filter_entry(|e| {
-            // Filter out directories and files matching exclude patterns
-            let file_name = e.file_name().to_string_lossy();
-            !exclude_patterns
-                .iter()
-                .any(|pattern| file_name.contains(pattern) || file_name == *pattern)
-        }) {
-            let entry = entry.context("Failed to read directory entry")?;
-            let entry_path = entry.path();
+        let script_content = format!(
+            r#"#!/bin/bash
+# Flame Environment Setup Script
+# Generated by flmadm install
+# Source this file to set up your Flame environment:
+#   source {prefix}/sbin/flmenv.sh
 
-            // Skip the source root itself
-            if entry_path == src {
-                continue;
-            }
+# Flame installation prefix
+export FLAME_HOME="{prefix}"
 
-            // Calculate relative path and destination
-            let relative_path = entry_path
-                .strip_prefix(src)
-                .context("Failed to strip prefix")?;
-            let dst_path = dst.join(relative_path);
+# Add Flame binaries to PATH
+if [[ ":$PATH:" != *":{prefix}/bin:"* ]]; then
+    export PATH="{prefix}/bin:$PATH"
+fi
 
-            if entry.file_type().is_dir() {
-                fs::create_dir_all(&dst_path)
-                    .context(format!("Failed to create directory {:?}", dst_path))?;
-            } else {
-                // Ensure parent directory exists
-                if let Some(parent) = dst_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::copy(entry_path, &dst_path)
-                    .context(format!("Failed to copy {:?}", entry_path))?;
-            }
-        }
+# Python environment for flamepy
+FLAME_SITE_PACKAGES="{site_packages}"
+if [ -d "$FLAME_SITE_PACKAGES" ]; then
+    if [[ ":$PYTHONPATH:" != *":$FLAME_SITE_PACKAGES:"* ]]; then
+        export PYTHONPATH="$FLAME_SITE_PACKAGES:$PYTHONPATH"
+    fi
+    
+    # Find pyarrow lib directory for native extensions
+    PYARROW_DIR=$(find "$FLAME_SITE_PACKAGES" -name "pyarrow" -type d 2>/dev/null | head -1)
+    if [ -n "$PYARROW_DIR" ] && [ -d "$PYARROW_DIR" ]; then
+        if [[ ":$LD_LIBRARY_PATH:" != *":$PYARROW_DIR:"* ]]; then
+            export LD_LIBRARY_PATH="$PYARROW_DIR:$LD_LIBRARY_PATH"
+        fi
+    fi
+fi
+
+# Print environment info (only when sourced interactively)
+if [[ $- == *i* ]]; then
+    echo "Flame environment loaded:"
+    echo "  FLAME_HOME=$FLAME_HOME"
+    echo "  PATH includes: {prefix}/bin"
+    if [ -d "$FLAME_SITE_PACKAGES" ]; then
+        echo "  PYTHONPATH includes: $FLAME_SITE_PACKAGES"
+    fi
+fi
+"#,
+            prefix = paths.prefix.display(),
+            site_packages = site_packages.display(),
+        );
+
+        fs::write(&env_script_path, script_content).context("Failed to write flmenv.sh")?;
+
+        let perms = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&env_script_path, perms)
+            .context("Failed to set flmenv.sh permissions")?;
+
+        println!("  ✓ Generated: {}", env_script_path.display());
+        println!(
+            "    To activate: source {}/sbin/flmenv.sh",
+            paths.prefix.display()
+        );
 
         Ok(())
     }
@@ -489,33 +439,27 @@ impl InstallationManager {
     ) -> Result<()> {
         println!("🗑️  Removing installation files...");
 
-        // Remove binaries
         if paths.bin.exists() {
             fs::remove_dir_all(&paths.bin).context("Failed to remove bin directory")?;
             println!("  ✓ Removed binaries");
         }
 
-        // Remove SDK
-        if paths.sdk_python.parent().unwrap().exists() {
-            fs::remove_dir_all(paths.sdk_python.parent().unwrap())
-                .context("Failed to remove sdk directory")?;
-            println!("  ✓ Removed Python SDK");
+        if paths.lib.exists() {
+            fs::remove_dir_all(&paths.lib).context("Failed to remove lib directory")?;
+            println!("  ✓ Removed Python libs");
         }
 
-        // Remove wheels
         if paths.wheels.exists() {
             fs::remove_dir_all(&paths.wheels).context("Failed to remove wheels directory")?;
             println!("  ✓ Removed wheels");
         }
 
-        // Remove migrations
         if paths.migrations.exists() {
             fs::remove_dir_all(&paths.migrations)
                 .context("Failed to remove migrations directory")?;
             println!("  ✓ Removed migrations");
         }
 
-        // Remove work directory
         if paths.work.exists() {
             fs::remove_dir_all(&paths.work).context("Failed to remove work directory")?;
             println!("  ✓ Removed working directory");
@@ -567,5 +511,197 @@ impl InstallationManager {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    mod get_components_to_install {
+        use super::*;
+
+        #[test]
+        fn single_profile_control_plane() {
+            let manager = InstallationManager::new();
+            let profiles = vec![InstallProfile::ControlPlane];
+            let components = manager.get_components_to_install(&profiles);
+
+            assert!(components.contains(&"flame-session-manager".to_string()));
+            assert!(components.contains(&"flmctl".to_string()));
+            assert!(components.contains(&"flmadm".to_string()));
+            assert!(!components.contains(&"flamepy".to_string()));
+        }
+
+        #[test]
+        fn single_profile_worker() {
+            let manager = InstallationManager::new();
+            let profiles = vec![InstallProfile::Worker];
+            let components = manager.get_components_to_install(&profiles);
+
+            assert!(components.contains(&"flame-executor-manager".to_string()));
+            assert!(components.contains(&"flamepy".to_string()));
+            assert!(!components.contains(&"flame-session-manager".to_string()));
+        }
+
+        #[test]
+        fn single_profile_client() {
+            let manager = InstallationManager::new();
+            let profiles = vec![InstallProfile::Client];
+            let components = manager.get_components_to_install(&profiles);
+
+            assert!(components.contains(&"flmctl".to_string()));
+            assert!(components.contains(&"flmping".to_string()));
+            assert!(components.contains(&"flamepy".to_string()));
+        }
+
+        #[test]
+        fn multiple_profiles_no_duplicates() {
+            let manager = InstallationManager::new();
+            let profiles = vec![InstallProfile::Worker, InstallProfile::Client];
+            let components = manager.get_components_to_install(&profiles);
+
+            let flamepy_count = components.iter().filter(|c| *c == "flamepy").count();
+            assert_eq!(flamepy_count, 1);
+        }
+
+        #[test]
+        fn all_profiles() {
+            let manager = InstallationManager::new();
+            let profiles = vec![
+                InstallProfile::ControlPlane,
+                InstallProfile::Worker,
+                InstallProfile::Client,
+            ];
+            let components = manager.get_components_to_install(&profiles);
+
+            assert!(components.contains(&"flame-session-manager".to_string()));
+            assert!(components.contains(&"flame-executor-manager".to_string()));
+            assert!(components.contains(&"flmctl".to_string()));
+            assert!(components.contains(&"flamepy".to_string()));
+        }
+
+        #[test]
+        fn empty_profiles() {
+            let manager = InstallationManager::new();
+            let profiles: Vec<InstallProfile> = vec![];
+            let components = manager.get_components_to_install(&profiles);
+
+            assert!(components.is_empty());
+        }
+    }
+
+    mod create_directories {
+        use super::*;
+
+        #[test]
+        fn creates_all_directories() {
+            let temp = tempdir().unwrap();
+            let paths = InstallationPaths::new(temp.path().to_path_buf());
+            let manager = InstallationManager::new();
+
+            manager.create_directories(&paths).unwrap();
+
+            assert!(paths.bin.exists());
+            assert!(paths.work.exists());
+            assert!(paths.work.join("sessions").exists());
+            assert!(paths.work.join("executors").exists());
+            assert!(paths.logs.exists());
+            assert!(paths.conf.exists());
+            assert!(paths.data.exists());
+            assert!(paths.cache.exists());
+            assert!(paths.migrations.exists());
+            assert!(paths.migrations.join("sqlite").exists());
+        }
+
+        #[test]
+        fn sets_data_directory_permissions() {
+            let temp = tempdir().unwrap();
+            let paths = InstallationPaths::new(temp.path().to_path_buf());
+            let manager = InstallationManager::new();
+
+            manager.create_directories(&paths).unwrap();
+
+            let metadata = fs::metadata(&paths.data).unwrap();
+            let mode = metadata.permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+
+        #[test]
+        fn idempotent_creation() {
+            let temp = tempdir().unwrap();
+            let paths = InstallationPaths::new(temp.path().to_path_buf());
+            let manager = InstallationManager::new();
+
+            manager.create_directories(&paths).unwrap();
+            manager.create_directories(&paths).unwrap();
+
+            assert!(paths.bin.exists());
+        }
+    }
+
+    mod remove_installation {
+        use super::*;
+
+        #[test]
+        fn removes_bin_directory() {
+            let temp = tempdir().unwrap();
+            let paths = InstallationPaths::new(temp.path().to_path_buf());
+            fs::create_dir_all(&paths.bin).unwrap();
+            fs::write(paths.bin.join("test"), "test").unwrap();
+
+            let manager = InstallationManager::new();
+            manager
+                .remove_installation(&paths, false, false, false)
+                .unwrap();
+
+            assert!(!paths.bin.exists());
+        }
+
+        #[test]
+        fn preserves_data_when_requested() {
+            let temp = tempdir().unwrap();
+            let paths = InstallationPaths::new(temp.path().to_path_buf());
+            fs::create_dir_all(&paths.data).unwrap();
+            fs::write(paths.data.join("test"), "test").unwrap();
+
+            let manager = InstallationManager::new();
+            manager
+                .remove_installation(&paths, true, false, false)
+                .unwrap();
+
+            assert!(paths.data.exists());
+        }
+
+        #[test]
+        fn preserves_config_when_requested() {
+            let temp = tempdir().unwrap();
+            let paths = InstallationPaths::new(temp.path().to_path_buf());
+            fs::create_dir_all(&paths.conf).unwrap();
+            fs::write(paths.conf.join("test.yaml"), "test").unwrap();
+
+            let manager = InstallationManager::new();
+            manager
+                .remove_installation(&paths, false, true, false)
+                .unwrap();
+
+            assert!(paths.conf.exists());
+        }
+
+        #[test]
+        fn preserves_logs_when_requested() {
+            let temp = tempdir().unwrap();
+            let paths = InstallationPaths::new(temp.path().to_path_buf());
+            fs::create_dir_all(&paths.logs).unwrap();
+            fs::write(paths.logs.join("test.log"), "test").unwrap();
+
+            let manager = InstallationManager::new();
+            manager
+                .remove_installation(&paths, false, false, true)
+                .unwrap();
+
+            assert!(paths.logs.exists());
+        }
     }
 }

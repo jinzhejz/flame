@@ -136,6 +136,7 @@ class ApplicationAttributes:
     delay_release: Optional[int] = None
     schema: Optional[ApplicationSchema] = None
     url: Optional[str] = None
+    installer: Optional[str] = None
 
 
 @dataclass
@@ -180,6 +181,7 @@ class Application:
     delay_release: Optional[int] = None
     schema: Optional[ApplicationSchema] = None
     url: Optional[str] = None
+    installer: Optional[str] = None
 
 
 class TaskInformer:

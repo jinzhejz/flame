@@ -10,10 +10,9 @@
 Example usage of the Flame Python SDK instance functionality.
 """
 
-import flamepy
-from flamepy import agent
-
 from dataclasses import dataclass
+
+from flamepy import agent
 
 
 @dataclass

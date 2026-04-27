@@ -17,31 +17,18 @@ RUN ./target/release/flmadm install \
     --skip-build \
     --force
 
-# Install Python 3.12 via uv to match runtime (ubuntu:24.04)
-# Then pre-warm uv cache for flamepy dependencies in the builder
-# This avoids network access during runtime container startup
-RUN /usr/bin/uv python install 3.12 && \
-    UV_CACHE_DIR=/usr/local/flame/data/cache/uv \
-    UV_LINK_MODE=copy \
-    /usr/bin/uv run --python 3.12 \
-    --find-links /usr/local/flame/wheels \
-    --with pip \
-    --with flamepy \
-    python -c "import flamepy; print('flamepy cache warmed in builder')"
-
 FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y wget vim iputils-ping ssh curl python3 python3-pip && rm -rf /var/lib/apt/lists/*
 
-# Copy the entire installation from builder (including uv in bin/ and pre-warmed cache)
+# Copy the entire installation from builder (includes lib/ with flamepy and sbin/flmenv.sh)
 COPY --from=builder /usr/local/flame /usr/local/flame
 
-# Add flame binaries to PATH (includes uv)
+# Add flame binaries to PATH
 ENV PATH="/usr/local/flame/bin:${PATH}"
 ENV FLAME_HOME=/usr/local/flame
 
-# Install flamepy and pytest for test client using uv from FLAME_HOME
-# Use UV_LINK_MODE=copy for cross-filesystem compatibility
-RUN UV_LINK_MODE=copy /usr/local/flame/bin/uv pip install --system --break-system-packages --no-cache /usr/local/flame/sdk/python pytest
+# Install only pytest for tests (flamepy already in FLAME_HOME/lib, use flmenv.sh for PYTHONPATH)
+RUN pip3 install --break-system-packages pytest
 
 CMD ["service", "ssh", "start", "-D"]

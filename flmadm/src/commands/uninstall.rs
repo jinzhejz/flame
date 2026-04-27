@@ -86,16 +86,12 @@ fn validate_and_confirm(config: &UninstallConfig) -> Result<InstallationPaths> {
 
     println!("✓ Found valid Flame installation");
 
-    // List what will be removed
     println!("\nThe following will be removed:");
     if paths.bin.exists() {
         println!("  • Binaries: {}", paths.bin.display());
     }
-    if paths.sdk_python.parent().unwrap().exists() {
-        println!(
-            "  • Python SDK: {}",
-            paths.sdk_python.parent().unwrap().display()
-        );
+    if paths.lib.exists() {
+        println!("  • Python libs: {}", paths.lib.display());
     }
     if paths.work.exists() {
         println!(

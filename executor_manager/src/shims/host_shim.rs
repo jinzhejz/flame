@@ -33,8 +33,8 @@ use crate::shims::grpc_shim::GrpcShim;
 use crate::shims::{ExecutorWorkDir, Shim, ShimPtr};
 use common::apis::{ApplicationContext, SessionContext, TaskContext, TaskOutput, TaskResult};
 use common::{
-    FlameError, FLAME_CACHE_ENDPOINT, FLAME_CA_FILE, FLAME_ENDPOINT, FLAME_HOME,
-    FLAME_INSTANCE_ENDPOINT, FLAME_LOG, FLAME_WORKING_DIRECTORY,
+    FlameError, FLAME_CACHE_ENDPOINT, FLAME_CA_FILE, FLAME_ENDPOINT, FLAME_INSTANCE_ENDPOINT,
+    FLAME_LOG,
 };
 
 struct HostInstance {
@@ -79,6 +79,7 @@ impl HostShim {
     pub async fn new_ptr(
         executor: &Executor,
         app: &ApplicationContext,
+        install_env_vars: &HashMap<String, String>,
     ) -> Result<ShimPtr, FlameError> {
         trace_fn!("HostShim::new_ptr");
 
@@ -87,7 +88,7 @@ impl HostShim {
 
         let mut instance_client = GrpcShim::new(&work_dir)?;
 
-        let instance = Self::launch_instance(app, executor, &work_dir)?;
+        let instance = Self::launch_instance(app, executor, &work_dir, install_env_vars)?;
 
         instance_client.connect().await?;
 
@@ -134,47 +135,6 @@ impl HostShim {
         Ok(envs)
     }
 
-    /// Setup per-application cache directories for uv and pip.
-    /// These directories are shared across all instances of the same application.
-    /// Uses FLAME_HOME/data/cache if FLAME_HOME is set, otherwise falls back to FLAME_WORKING_DIRECTORY/cache.
-    fn setup_cache(app_name: &str) -> Result<HashMap<String, String>, FlameError> {
-        trace_fn!("HostShim::setup_cache");
-
-        let cache_base = match env::var(FLAME_HOME) {
-            Ok(flame_home) => Path::new(&flame_home).join("data").join("cache"),
-            Err(_) => Path::new(FLAME_WORKING_DIRECTORY).join("cache"),
-        };
-        let app_cache_base = cache_base.join(app_name);
-        let uv_cache_dir = app_cache_base.join("uv");
-        let pip_cache_dir = app_cache_base.join("pip");
-
-        tracing::debug!(
-            "UV cache directory of application <{}>: {}",
-            app_name,
-            uv_cache_dir.display()
-        );
-        tracing::debug!(
-            "PIP cache directory of application <{}>: {}",
-            app_name,
-            pip_cache_dir.display()
-        );
-
-        Self::create_dir(&uv_cache_dir, "UV cache")?;
-        Self::create_dir(&pip_cache_dir, "PIP cache")?;
-
-        let mut envs = HashMap::new();
-        envs.insert(
-            "UV_CACHE_DIR".to_string(),
-            uv_cache_dir.to_string_lossy().to_string(),
-        );
-        envs.insert(
-            "PIP_CACHE_DIR".to_string(),
-            pip_cache_dir.to_string_lossy().to_string(),
-        );
-
-        Ok(envs)
-    }
-
     /// Expand environment variables in a string
     /// Supports both ${VAR} and $VAR syntax
     fn expand_env_vars(s: &str) -> String {
@@ -183,54 +143,11 @@ impl HostShim {
             .into_owned()
     }
 
-    /// Find site-packages directory under lib/ that contains flamepy
-    fn find_site_packages(lib_path: &Path) -> Option<PathBuf> {
-        if !lib_path.exists() {
-            return None;
-        }
-
-        for entry in fs::read_dir(lib_path).ok()?.flatten() {
-            let python_dir = entry.path();
-            if python_dir.is_dir() && entry.file_name().to_string_lossy().starts_with("python") {
-                let site_packages = python_dir.join("site-packages");
-                if site_packages.join("flamepy").exists() {
-                    return Some(site_packages);
-                }
-            }
-        }
-        None
-    }
-
-    /// Find all package directories containing .so files (native extensions)
-    fn find_native_lib_paths(site_packages: &Path) -> Vec<String> {
-        let mut paths = std::collections::HashSet::new();
-
-        fn scan_dir(dir: &Path, paths: &mut std::collections::HashSet<String>, depth: usize) {
-            if depth > 4 {
-                return;
-            }
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        scan_dir(&path, paths, depth + 1);
-                    } else if path.extension().map(|e| e == "so").unwrap_or(false) {
-                        if let Some(parent) = path.parent() {
-                            paths.insert(parent.to_string_lossy().to_string());
-                        }
-                    }
-                }
-            }
-        }
-
-        scan_dir(site_packages, &mut paths, 0);
-        paths.into_iter().collect()
-    }
-
     fn launch_instance(
         app: &ApplicationContext,
         executor: &Executor,
         work_dir: &ExecutorWorkDir,
+        install_env_vars: &HashMap<String, String>,
     ) -> Result<HostInstance, FlameError> {
         trace_fn!("HostShim::launch_instance");
 
@@ -279,24 +196,11 @@ impl HostShim {
             envs.entry("HOME".to_string()).or_insert(home);
         }
 
-        // Set PYTHONPATH and LD_LIBRARY_PATH if flamepy is installed via --prefix
-        if let Ok(flame_home) = env::var(FLAME_HOME) {
-            let lib_path = Path::new(&flame_home).join("lib");
-            if let Some(site_packages) = Self::find_site_packages(&lib_path) {
-                let site_packages_str = site_packages.to_string_lossy().to_string();
-                envs.entry("PYTHONPATH".to_string())
-                    .and_modify(|e| *e = format!("{}:{}", site_packages_str, e))
-                    .or_insert(site_packages_str);
-
-                // Set LD_LIBRARY_PATH for all packages with native extensions (.so files)
-                let ld_paths = Self::find_native_lib_paths(&site_packages);
-                if !ld_paths.is_empty() {
-                    let ld_paths_str = ld_paths.join(":");
-                    envs.entry("LD_LIBRARY_PATH".to_string())
-                        .and_modify(|e| *e = format!("{}:{}", ld_paths_str, e))
-                        .or_insert(ld_paths_str);
-                }
-            }
+        // Merge app-specific install environment variables (from appmgr)
+        for (key, value) in install_env_vars {
+            envs.entry(key.clone())
+                .and_modify(|e| *e = format!("{}:{}", value, e))
+                .or_insert(value.clone());
         }
 
         tracing::debug!(
@@ -314,15 +218,6 @@ impl HostShim {
         // Setup working directory and tmp (per-instance)
         let work_dir_envs = Self::setup_working_directory(app_work_dir)?;
         for (key, value) in work_dir_envs {
-            envs.entry(key).or_insert(value);
-        }
-
-        // Setup cache directories (per-application) and get environment defaults
-        // Use entry().or_insert() so application-specific envs take precedence over defaults
-        // This allows applications like flmrun to specify UV_CACHE_DIR pointing to
-        // the pre-cached directory instead of using a per-instance empty cache
-        let cache_envs = Self::setup_cache(&app.name)?;
-        for (key, value) in cache_envs {
             envs.entry(key).or_insert(value);
         }
 

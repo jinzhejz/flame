@@ -96,6 +96,7 @@ mod tests {
             delay_release: Duration::seconds(0),
             schema: None,
             url: None,
+            installer: None,
         }
     }
 

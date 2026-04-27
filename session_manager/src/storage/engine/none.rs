@@ -116,6 +116,7 @@ impl Engine for NoneEngine {
             delay_release: attr.delay_release,
             schema: attr.schema,
             url: attr.url,
+            installer: attr.installer,
         };
 
         let mut apps = lock_ptr!(self.applications)?;
@@ -157,6 +158,7 @@ impl Engine for NoneEngine {
             delay_release: attr.delay_release,
             schema: attr.schema,
             url: attr.url,
+            installer: attr.installer,
         };
 
         apps.insert(id, updated.clone());

@@ -1,9 +1,7 @@
-import json
-from datetime import datetime, timezone
 
 import pyarrow as pa
 
-from flamepy.core.cache import ObjectRef, _serialize_object, _deserialize_object
+from flamepy.core.cache import ObjectRef, _deserialize_object, _serialize_object
 
 
 def test_objectref_encode_decode_roundtrip():
@@ -23,8 +21,7 @@ def test_serialize_deserialize_roundtrip():
 
 
 def test_get_object_with_fake_flight_client(monkeypatch):
-    import pyarrow as pa
-    from flamepy.core.cache import _get_flight_client, get_object
+    from flamepy.core.cache import get_object
 
     # Create base object and corresponding batch/table
     base = {"hello": "world"}
