@@ -11,25 +11,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import importlib
 import inspect
 import logging
 import os
-import shutil
-import site
-import subprocess
-import sys
-import tarfile
-import zipfile
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 import cloudpickle
 
 from flamepy.core import ObjectRef, get_object, put_object, update_object
 from flamepy.core.service import FlameService, SessionContext, TaskContext
-from flamepy.core.types import TaskOutput, short_name
-from flamepy.runner.storage import StorageBackend, create_storage_backend
+from flamepy.core.types import TaskOutput
 from flamepy.runner.types import RunnerContext, RunnerRequest
 
 logger = logging.getLogger(__name__)
@@ -47,9 +38,8 @@ class FlameRunpyService(FlameService):
     def __init__(self):
         """Initialize the FlameRunpyService."""
         self._ssn_ctx: SessionContext = None
-        self._execution_object: Any = None  # Cached execution object
-        self._runner_context: RunnerContext = None  # Configuration
-        self._storage_backend: Optional[StorageBackend] = None  # Storage backend for downloading packages
+        self._execution_object: Any = None
+        self._runner_context: RunnerContext = None
 
     def _resolve_object_ref(self, value: Any) -> Any:
         """
@@ -93,199 +83,12 @@ class FlameRunpyService(FlameService):
 
         return value
 
-    def _is_archive(self, file_path: str) -> bool:
-        """
-        Check if a file is an archive that needs to be extracted.
-
-        Args:
-            file_path: Path to the file
-
-        Returns:
-            True if the file is a supported archive format
-        """
-        archive_extensions = [".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".zip"]
-        return any(file_path.endswith(ext) for ext in archive_extensions)
-
-    def _extract_archive(self, archive_path: str, extract_to: str) -> str:
-        """
-        Extract an archive to a directory.
-
-        Args:
-            archive_path: Path to the archive file
-            extract_to: Directory to extract to
-
-        Returns:
-            Path to the extracted directory
-
-        Raises:
-            RuntimeError: If extraction fails
-        """
-        logger.info(f"Extracting archive: {archive_path} to {extract_to}")
-
-        try:
-            # Remove old extracted directory if it exists to ensure clean extraction
-            if os.path.exists(extract_to):
-                logger.info(f"Removing existing extracted directory: {extract_to}")
-                shutil.rmtree(extract_to)
-
-            # Create extraction directory
-            os.makedirs(extract_to, exist_ok=True)
-
-            # Determine archive type and extract
-            if archive_path.endswith(".zip"):
-                with zipfile.ZipFile(archive_path, "r") as zip_ref:
-                    zip_ref.extractall(extract_to)
-                logger.info(f"Extracted zip archive to {extract_to}")
-            elif any(archive_path.endswith(ext) for ext in [".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar"]):
-                with tarfile.open(archive_path, "r:*") as tar_ref:
-                    tar_ref.extractall(extract_to)
-                logger.info(f"Extracted tar archive to {extract_to}")
-            else:
-                raise RuntimeError(f"Unsupported archive format: {archive_path}")
-
-            return extract_to
-
-        except Exception as e:
-            logger.error(f"Failed to extract archive: {e}", exc_info=True)
-            raise RuntimeError(f"Archive extraction failed: {e}")
-
-    def _install_package_from_url(self, url: str) -> None:
-        """
-        Install a package from a URL.
-
-        Supports file:// and http:///https:// URLs pointing to package files (archives).
-        If the URL points to an archive file (.tar.gz, .zip, etc.), it will be downloaded
-        to the tmp directory, extracted to the working directory, then installed from the extracted directory.
-
-        Args:
-            url: The package URL (e.g., file:///opt/my-package.tar.gz or file:///opt/my-package or http://host/path/package.tar.gz)
-
-        Raises:
-            FileNotFoundError: If the package path does not exist (for file:// URLs)
-            RuntimeError: If package installation fails
-        """
-
-        logger.info(f"Installing package from URL: {url}")
-
-        install_path = None
-        parsed_url = urlparse(url)
-        if self._is_archive(parsed_url.path):
-            # Extract storage_base from URL (e.g., file:///opt/my-package.tar.gz or http://host/path/package.tar.gz)
-            filename = os.path.basename(parsed_url.path)
-
-            # Remove filename from path
-            path_without_filename = parsed_url.path[: -len(filename)]
-            # Ensure path ends with '/' for proper URL construction
-            if not path_without_filename.endswith("/"):
-                path_without_filename += "/"
-            # Reconstruct URL without filename
-            storage_base = f"{parsed_url.scheme}://{parsed_url.netloc}{path_without_filename}"
-
-            try:
-                self._storage_backend = create_storage_backend(storage_base)
-                logger.info(f"Initialized storage backend: {type(self._storage_backend).__name__} with base: {storage_base}")
-            except Exception as e:
-                raise RuntimeError(f"Failed to create storage backend: {e}")
-
-            tmp_dir = os.environ.get("TMP", os.path.join(os.getcwd(), "tmp"))
-            os.makedirs(tmp_dir, exist_ok=True)
-
-            local_package_path = os.path.join(tmp_dir, filename)
-            extract_dir = os.path.join(tmp_dir, f"extracted_{filename.split('.')[0]}")
-
-            if os.path.exists(extract_dir):
-                logger.info(f"Package already extracted at: {extract_dir}, skipping download")
-                extracted_dir = extract_dir
-            else:
-                try:
-                    self._storage_backend.download(filename, local_package_path)
-                    logger.info(f"Downloaded package to: {local_package_path}")
-                except Exception as e:
-                    logger.error(f"Failed to download package from storage: {e}")
-                    raise RuntimeError(f"Failed to download package from storage: {e}")
-
-                logger.info("Package is an archive file, extracting...")
-                extracted_dir = self._extract_archive(local_package_path, extract_dir)
-
-            install_path = extracted_dir
-        else:
-            # Direct file access (e.g., file:///opt/my-package)
-            install_path = parsed_url.path
-
-        # Use sys.executable -m pip to install into the current virtual environment
-        # pip install will upgrade the package if it's already installed
-        logger.info(f"Installing package: {install_path}")
-        logger.debug(f"Python executable: {sys.executable}")
-        logger.debug(f"Current working directory: {os.getcwd()}")
-        install_args = [sys.executable, "-m", "pip", "install", "--upgrade", install_path]
-        logger.debug(f"Install command: {' '.join(install_args)}")
-        env = os.environ.copy()
-        logger.debug(f"Environment from parent process: {env}")
-
-        # Create a dedicated log file for the installation process
-        working_dir = os.getcwd()
-        if self._ssn_ctx and getattr(self._ssn_ctx, "session_id", None):
-            session_id = self._ssn_ctx.session_id
-        else:
-            # Generate a short random identifier when session context is unavailable
-            session_id = short_name("unknown")
-        log_file_path = os.path.join(working_dir, f"package_installation_{session_id}.log")
-        logger.info(f"Installation progress will be logged to: {log_file_path}")
-
-        try:
-            # Open the log file and redirect subprocess output to it
-            with open(log_file_path, "w") as log_file:
-                # Write header to log file
-                log_file.write("Package Installation Log\n")
-                log_file.write(f"{'=' * 80}\n")
-                log_file.write(f"Session ID: {session_id}\n")
-                log_file.write(f"Install command: {' '.join(install_args)}\n")
-                log_file.write(f"Working directory: {os.getcwd()}\n")
-                log_file.write(f"Python executable: {sys.executable}\n")
-                log_file.write(f"{'=' * 80}\n\n")
-                log_file.flush()
-
-                # Run the installation with output redirected to the log file
-                subprocess.run(
-                    install_args,
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,  # Redirect stderr to stdout so both go to the same log
-                    text=True,
-                    check=True,
-                    env=env,
-                )
-
-            logger.info(f"Successfully installed package from: {install_path}")
-
-            # Reload site packages to make the newly installed package available
-            # This is necessary because the Python interpreter has already started
-            logger.info("Reloading site packages to pick up newly installed package")
-            importlib.reload(site)
-            logger.debug(f"Updated sys.path: {sys.path}")
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to install package: {e}")
-            logger.error(f"Return code: {e.returncode}")
-            logger.error(f"Install command was: {' '.join(install_args)}")
-            logger.error(f"Installation log file: {log_file_path}")
-
-            raise RuntimeError(f"Package installation failed: {e}. Check log at {log_file_path}")
-        finally:
-            # Read and log the installation output from the log file
-            try:
-                if logger.isEnabledFor(logging.DEBUG):
-                    with open(log_file_path, "r") as log_file:
-                        installation_output = log_file.read()
-                        logger.debug(f"Package installation output:\n{installation_output}")
-            except Exception as read_error:
-                logger.error(f"Could not read installation log: {read_error}")
-
     def on_session_enter(self, context: SessionContext) -> bool:
         """
         Handle session enter event.
 
-        If the application URL is specified, install the package into the current .venv.
         Loads the RunnerContext and execution object, instantiating classes if needed.
+        Package installation is handled by the executor manager before this is called.
 
         Args:
             context: Session context containing application and session information
@@ -295,21 +98,11 @@ class FlameRunpyService(FlameService):
         """
         logger.info(f"Entering session: {context.session_id}")
         logger.debug(f"Application: {context.application.name}")
-        logger.info(f"Application context: {context.application}")
-        logger.info(f"Application URL value: {repr(context.application.url)}")
 
         # Store the session context for use in task invocation
         self._ssn_ctx = context
 
-        # Initialize storage backend if URL is specified
-        if context.application.url:
-            logger.info(f"Application URL specified: {context.application.url}")
-            self._install_package_from_url(context.application.url)
-        else:
-            logger.info("No application URL specified, skipping package installation")
-            self._storage_backend = None
-
-        # Step 1: Load RunnerContext from common_data
+        # Load RunnerContext from common_data
         common_data_bytes = context.common_data()
         if common_data_bytes is None:
             raise ValueError("Common data is None in session context")

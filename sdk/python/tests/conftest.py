@@ -1,11 +1,7 @@
-import os
-import json
 import time
 from datetime import datetime, timezone
 
 import pytest
-
-from flamepy.core.cache import ObjectRef
 
 
 class _FakeChannel:

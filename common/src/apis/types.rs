@@ -95,6 +95,7 @@ pub struct Application {
     pub delay_release: Duration,
     pub schema: Option<ApplicationSchema>,
     pub url: Option<String>,
+    pub installer: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +112,7 @@ pub struct ApplicationAttributes {
     pub delay_release: Duration,
     pub schema: Option<ApplicationSchema>,
     pub url: Option<String>,
+    pub installer: Option<String>,
 }
 
 impl Default for ApplicationAttributes {
@@ -128,8 +130,44 @@ impl Default for ApplicationAttributes {
             delay_release: DEFAULT_DELAY_RELEASE,
             schema: Some(ApplicationSchema::default()),
             url: None,
+            installer: None,
         }
     }
+}
+
+pub fn validate_application_name(name: &str) -> Result<(), crate::FlameError> {
+    if name.is_empty() {
+        return Err(crate::FlameError::InvalidConfig(
+            "application name cannot be empty".into(),
+        ));
+    }
+    if name.len() > 253 {
+        return Err(crate::FlameError::InvalidConfig(
+            "application name exceeds maximum length of 253 characters".into(),
+        ));
+    }
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err(crate::FlameError::InvalidConfig(format!(
+            "application name contains invalid characters (path traversal): {}",
+            name
+        )));
+    }
+    if name.starts_with('.') || name.starts_with('-') {
+        return Err(crate::FlameError::InvalidConfig(format!(
+            "application name cannot start with '.' or '-': {}",
+            name
+        )));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(crate::FlameError::InvalidConfig(format!(
+            "application name contains invalid characters (only alphanumeric, '-', '_', '.' allowed): {}",
+            name
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -289,6 +327,7 @@ pub struct ApplicationContext {
     pub working_directory: Option<String>,
     pub environments: HashMap<String, String>,
     pub url: Option<String>,
+    pub installer: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, strum_macros::Display)]

@@ -424,6 +424,7 @@ class Runner:
                 delay_release=template_app.delay_release,
                 schema=template_app.schema,
                 url=storage_url,
+                installer=template_app.installer,
             )
 
             register_application(self._name, app_attrs)

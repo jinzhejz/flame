@@ -28,10 +28,11 @@ def setup_test_env():
     flamepy.register_application(
         FLM_TEST_APP,
         flamepy.ApplicationAttributes(
-            command="${FLAME_HOME}/bin/uv",
+            command="python3",
             working_directory="/opt/e2e",
-            environments={"FLAME_LOG_LEVEL": "DEBUG"},
-            arguments=["run", "src/e2e/instance_svc.py", "src/e2e/api.py"],
+            environments={"FLAME_LOG_LEVEL": "DEBUG", "PYTHONPATH": "/opt/e2e/src"},
+            arguments=["src/e2e/instance_svc.py", "src/e2e/api.py"],
+            installer="python",
         ),
     )
 

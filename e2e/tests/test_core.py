@@ -24,7 +24,6 @@ from e2e.helpers import (
 )
 
 FLM_TEST_SVC_APP = "flme2e-svc"
-FLM_TEST_SVC_APP_URL = "file:///opt/e2e"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -33,11 +32,11 @@ def setup_test_env():
     flamepy.register_application(
         FLM_TEST_SVC_APP,
         flamepy.ApplicationAttributes(
-            command="${FLAME_HOME}/bin/uv",
+            command="python3",
             working_directory="/opt/e2e",
-            environments={"FLAME_LOG_LEVEL": "DEBUG"},
-            arguments=["run", "src/e2e/basic_svc.py", "src/e2e/api.py"],
-            url=FLM_TEST_SVC_APP_URL,
+            environments={"FLAME_LOG_LEVEL": "DEBUG", "PYTHONPATH": "/opt/e2e/src"},
+            arguments=["src/e2e/basic_svc.py", "src/e2e/api.py"],
+            installer="python",
         ),
     )
 
@@ -131,10 +130,8 @@ def test_application_context_info():
     # Check application context is present
     assert response.application_context is not None
     assert response.application_context.name == FLM_TEST_SVC_APP
-    # Command should use FLAME_HOME environment variable
-    assert response.application_context.command == "${FLAME_HOME}/bin/uv"
+    assert response.application_context.command == "python3"
     assert response.application_context.working_directory == "/opt/e2e"
-    assert response.application_context.url == FLM_TEST_SVC_APP_URL
 
     session.close()
 
@@ -172,10 +169,8 @@ def test_all_context_info():
 
     # Check application context details
     assert response.application_context.name == FLM_TEST_SVC_APP
-    # Command should use FLAME_HOME environment variable
-    assert response.application_context.command == "${FLAME_HOME}/bin/uv"
+    assert response.application_context.command == "python3"
     assert response.application_context.working_directory == "/opt/e2e"
-    assert response.application_context.url == FLM_TEST_SVC_APP_URL
 
     session.close()
 
@@ -383,17 +378,16 @@ def test_context_info_selective_request():
 def test_task_invoke_exception_handling():
     """Test that exceptions in on_task_invoke are properly handled and recorded."""
     FLM_ERROR_SVC_APP = "flme2e-error-svc"
-    FLM_ERROR_SVC_APP_URL = "file:///opt/e2e"
 
     # Register the error service application
     flamepy.register_application(
         FLM_ERROR_SVC_APP,
         flamepy.ApplicationAttributes(
-            command="${FLAME_HOME}/bin/uv",
+            command="python3",
             working_directory="/opt/e2e",
-            environments={"FLAME_LOG_LEVEL": "DEBUG"},
-            arguments=["run", "src/e2e/error_svc.py"],
-            url=FLM_ERROR_SVC_APP_URL,
+            environments={"FLAME_LOG_LEVEL": "DEBUG", "PYTHONPATH": "/opt/e2e/src"},
+            arguments=["src/e2e/error_svc.py"],
+            installer="python",
         ),
     )
 

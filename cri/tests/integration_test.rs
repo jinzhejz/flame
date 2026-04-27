@@ -41,6 +41,7 @@ fn default_test_runtime() -> PodRuntime {
 }
 
 #[tokio::test]
+#[ignore] // Requires containerd running
 async fn test_new_pod_manager() -> Result<(), FlameError> {
     let pm = PodManager::new("/run/containerd/containerd.sock", &default_test_runtime()).await?;
 
@@ -50,6 +51,7 @@ async fn test_new_pod_manager() -> Result<(), FlameError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires containerd running
 async fn test_run_pod() -> Result<(), FlameError> {
     let mut pm =
         PodManager::new("/run/containerd/containerd.sock", &default_test_runtime()).await?;
@@ -64,6 +66,7 @@ async fn test_run_pod() -> Result<(), FlameError> {
         environments: HashMap::new(),
         working_directory: None,
         url: None,
+        installer: None,
     };
 
     let pod = pm.run_pod(&app).await?;
@@ -80,6 +83,7 @@ async fn test_run_pod() -> Result<(), FlameError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires containerd running
 async fn test_list_pods() -> Result<(), FlameError> {
     let mut pm =
         PodManager::new("/run/containerd/containerd.sock", &default_test_runtime()).await?;
@@ -94,6 +98,7 @@ async fn test_list_pods() -> Result<(), FlameError> {
         environments: HashMap::new(),
         working_directory: None,
         url: None,
+        installer: None,
     };
 
     let _ = pm.run_pod(&app).await?;

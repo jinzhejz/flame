@@ -11,9 +11,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use stdng::{logs::TraceFn, trace_fn};
 
+use crate::appmgr::ApplicationManager;
 use crate::client::BackendClient;
 use crate::executor::Executor;
 
@@ -28,7 +31,11 @@ mod unbinding;
 mod unknown;
 mod void;
 
-pub fn from(client: BackendClient, e: Executor) -> Box<dyn State> {
+pub fn from(
+    client: BackendClient,
+    e: Executor,
+    app_manager: Arc<ApplicationManager>,
+) -> Box<dyn State> {
     tracing::debug!("Build state <{}> for Executor <{}>.", e.state, e.id);
 
     match e.state {
@@ -39,6 +46,7 @@ pub fn from(client: BackendClient, e: Executor) -> Box<dyn State> {
         ExecutorState::Idle => Box::new(idle::IdleState {
             client,
             executor: e,
+            app_manager,
         }),
         ExecutorState::Binding => Box::new(binding::BindingState {
             client,
@@ -68,6 +76,7 @@ pub trait State: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::appmgr::ApplicationManager;
     use crate::executor::Executor;
     use common::apis::{ResourceRequirement, Shim};
 
@@ -86,6 +95,10 @@ mod tests {
         }
     }
 
+    fn create_test_app_manager() -> Arc<ApplicationManager> {
+        Arc::new(ApplicationManager::new().expect("failed to create test ApplicationManager"))
+    }
+
     mod factory_tests {
         use super::*;
 
@@ -93,56 +106,64 @@ mod tests {
         async fn test_from_void_state() {
             let exe = create_test_executor("exe-1", ExecutorState::Void);
             let client = BackendClient::default();
-            let _state = from(client, exe);
+            let app_manager = create_test_app_manager();
+            let _state = from(client, exe, app_manager);
         }
 
         #[tokio::test]
         async fn test_from_idle_state() {
             let exe = create_test_executor("exe-1", ExecutorState::Idle);
             let client = BackendClient::default();
-            let _state = from(client, exe);
+            let app_manager = create_test_app_manager();
+            let _state = from(client, exe, app_manager);
         }
 
         #[tokio::test]
         async fn test_from_binding_state() {
             let exe = create_test_executor("exe-1", ExecutorState::Binding);
             let client = BackendClient::default();
-            let _state = from(client, exe);
+            let app_manager = create_test_app_manager();
+            let _state = from(client, exe, app_manager);
         }
 
         #[tokio::test]
         async fn test_from_bound_state() {
             let exe = create_test_executor("exe-1", ExecutorState::Bound);
             let client = BackendClient::default();
-            let _state = from(client, exe);
+            let app_manager = create_test_app_manager();
+            let _state = from(client, exe, app_manager);
         }
 
         #[tokio::test]
         async fn test_from_unbinding_state() {
             let exe = create_test_executor("exe-1", ExecutorState::Unbinding);
             let client = BackendClient::default();
-            let _state = from(client, exe);
+            let app_manager = create_test_app_manager();
+            let _state = from(client, exe, app_manager);
         }
 
         #[tokio::test]
         async fn test_from_releasing_state() {
             let exe = create_test_executor("exe-1", ExecutorState::Releasing);
             let client = BackendClient::default();
-            let _state = from(client, exe);
+            let app_manager = create_test_app_manager();
+            let _state = from(client, exe, app_manager);
         }
 
         #[tokio::test]
         async fn test_from_unknown_state() {
             let exe = create_test_executor("exe-1", ExecutorState::Unknown);
             let client = BackendClient::default();
-            let _state = from(client, exe);
+            let app_manager = create_test_app_manager();
+            let _state = from(client, exe, app_manager);
         }
 
         #[tokio::test]
         async fn test_from_released_state() {
             let exe = create_test_executor("exe-1", ExecutorState::Released);
             let client = BackendClient::default();
-            let _state = from(client, exe);
+            let app_manager = create_test_app_manager();
+            let _state = from(client, exe, app_manager);
         }
     }
 }

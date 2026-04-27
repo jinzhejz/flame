@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use stdng::{lock_ptr, logs::TraceFn, trace_fn, MutexPtr};
 use tokio::task::JoinHandle;
 
+use crate::appmgr::ApplicationManager;
 use crate::client::BackendClient;
 use crate::shims::ShimPtr;
 use ::rpc::flame::v1::{self as rpc, ExecutorSpec, ExecutorStatus, Metadata};
@@ -138,7 +139,7 @@ impl Executor {
     }
 }
 
-pub fn start(client: BackendClient, executor: ExecutorPtr) {
+pub fn start(client: BackendClient, executor: ExecutorPtr, app_manager: Arc<ApplicationManager>) {
     tokio::task::spawn(async move {
         loop {
             let exec = {
@@ -157,7 +158,7 @@ pub fn start(client: BackendClient, executor: ExecutorPtr) {
                 break;
             }
 
-            let mut state = states::from(client.clone(), exec.clone());
+            let mut state = states::from(client.clone(), exec.clone(), app_manager.clone());
             match state.execute().await {
                 Ok(next_state) => {
                     let mut exec = lock_ptr!(executor);

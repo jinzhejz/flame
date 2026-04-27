@@ -9,9 +9,9 @@
 Example usage of the Flame Python SDK service functionality.
 """
 
-import flamepy
 from typing import Optional
 
+import flamepy
 from flamepy.core.types import TaskOutput
 
 
@@ -56,7 +56,7 @@ class ExampleService(flamepy.FlameService):
 
     def on_session_leave(self) -> bool:
         """Handle session leave."""
-        print(f"🔴 Leaving session")
+        print("🔴 Leaving session")
         print(f"   Total tasks processed: {self._task_count}")
 
         self._session_context = None

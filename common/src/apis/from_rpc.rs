@@ -127,6 +127,7 @@ impl TryFrom<rpc::Application> for ApplicationContext {
                 .map(|e| (e.name, e.value))
                 .collect(),
             url: spec.url.clone(),
+            installer: spec.installer.clone(),
         })
     }
 }
@@ -212,6 +213,7 @@ impl TryFrom<&rpc::Application> for Application {
                 .unwrap_or(DEFAULT_DELAY_RELEASE),
             schema: spec.schema.map(ApplicationSchema::from),
             url: spec.url.clone(),
+            installer: spec.installer.clone(),
         })
     }
 }
@@ -239,6 +241,7 @@ impl From<rpc::ApplicationSpec> for ApplicationAttributes {
                 .unwrap_or(DEFAULT_DELAY_RELEASE),
             schema: spec.schema.map(ApplicationSchema::from),
             url: spec.url.clone(),
+            installer: spec.installer.clone(),
         }
     }
 }

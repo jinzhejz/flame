@@ -270,6 +270,7 @@ async fn test_application_lifecycle() -> Result<(), FlameError> {
                     common_data: None,
                 }),
                 url: None,
+                installer: None,
             },
         ),
         (
@@ -287,6 +288,7 @@ async fn test_application_lifecycle() -> Result<(), FlameError> {
                 delay_release: None,
                 schema: None,
                 url: None,
+                installer: None,
             },
         ),
     ];

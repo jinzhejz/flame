@@ -1,8 +1,5 @@
-import types
 import time
 from datetime import datetime, timezone
-
-import pytest
 
 import flamepy.core.client as client
 
@@ -71,7 +68,6 @@ def test_connection_connect_https_with_tls(monkeypatch, tmp_path):
 
 
 def test_session_create_task_with_mocked_frontend(monkeypatch):
-    import flamepy.core.client as coreclient
 
     class DummyFrontend:
         def CreateTask(self, req):
@@ -95,7 +91,6 @@ def test_session_create_task_with_mocked_frontend(monkeypatch):
     from flamepy.core.client import Session, SessionState
 
     s = Session(connection=fake_conn, id="sess-1", application="app", slots=1, state=SessionState.OPEN, creation_time=datetime.now(timezone.utc), pending=0, running=0, succeed=0, failed=0, completion_time=None)
-    from flamepy.core.types import TaskState
 
     t = s.create_task(b"input")
     assert t.session_id == s.id

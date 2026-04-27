@@ -432,6 +432,7 @@ impl Controller {
         attr: ApplicationAttributes,
     ) -> Result<(), FlameError> {
         trace_fn!("Controller::register_application");
+        common::apis::validate_application_name(&name)?;
         self.storage.register_application(name, attr).await
     }
 
@@ -446,6 +447,7 @@ impl Controller {
         attr: ApplicationAttributes,
     ) -> Result<(), FlameError> {
         trace_fn!("Controller::update_application");
+        common::apis::validate_application_name(&name)?;
         self.storage.update_application(name, attr).await
     }
 

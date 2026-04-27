@@ -159,6 +159,11 @@ async fn view_application(
         "URL:",
         application.attributes.url.unwrap_or_default()
     );
+    println!(
+        "{:<15}{}",
+        "Installer:",
+        application.attributes.installer.unwrap_or_default()
+    );
     println!("{:<15}", "Labels:");
     for label in application.attributes.labels {
         println!("\t{label}");

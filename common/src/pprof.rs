@@ -16,12 +16,12 @@ use std::time::Duration;
 use axum::{
     extract::Query,
     http::{header, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
 use pprof::ProfilerGuardBuilder;
-use serde::Deserialize;
+use serde_derive::Deserialize;
 use tokio::net::TcpListener;
 
 const DEFAULT_PPROF_PORT: u16 = 6060;
@@ -34,7 +34,7 @@ struct ProfileParams {
     frequency: Option<i32>,
 }
 
-async fn cpu_profile(Query(params): Query<ProfileParams>) -> impl IntoResponse {
+async fn cpu_profile(Query(params): Query<ProfileParams>) -> Response {
     let seconds = params.seconds.unwrap_or(DEFAULT_SAMPLE_SECONDS);
     let frequency = params.frequency.unwrap_or(DEFAULT_FREQUENCY);
 
@@ -75,7 +75,7 @@ async fn cpu_profile(Query(params): Query<ProfileParams>) -> impl IntoResponse {
     }
 }
 
-async fn cpu_profile_proto(Query(params): Query<ProfileParams>) -> impl IntoResponse {
+async fn cpu_profile_proto(Query(params): Query<ProfileParams>) -> Response {
     let seconds = params.seconds.unwrap_or(DEFAULT_SAMPLE_SECONDS);
     let frequency = params.frequency.unwrap_or(DEFAULT_FREQUENCY);
 

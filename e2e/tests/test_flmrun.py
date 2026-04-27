@@ -38,24 +38,24 @@ FLMRUN_E2E_APP = "flmrun-e2e"
 @pytest.fixture(autouse=True)
 def setup_flmrun_with_e2e():
     """
-    Fixture to register a flmrun application with e2e package URL.
+    Fixture to register a flmrun application with e2e modules available.
 
-    This automatically registers a custom flmrun application that installs
-    the e2e package when a session starts, making e2e modules available
-    to the runner.
+    This registers a custom flmrun application with PYTHONPATH set to include
+    the e2e package, making e2e modules available to the runner.
     """
     # Get the base flmrun application configuration
     flmrun = flamepy.get_application("flmrun")
 
-    # Register a new application with e2e directory URL for package installation
+    # Register a new application with PYTHONPATH including e2e
     flamepy.register_application(
         FLMRUN_E2E_APP,
         flamepy.ApplicationAttributes(
-            url="file:///opt/e2e",  # e2e directory to be installed
-            working_directory=flmrun.working_directory,
+            working_directory="/opt/e2e",
             command=flmrun.command,
             arguments=flmrun.arguments,
-            description="Flmrun with e2e package installed",
+            environments={"PYTHONPATH": "/opt/e2e/src"},
+            installer="python",
+            description="Flmrun with e2e modules available",
         ),
     )
 
@@ -75,8 +75,7 @@ def test_flmrun_application_registered():
     flmrun = flamepy.get_application(FLMRUN_E2E_APP)
     assert flmrun.name == FLMRUN_E2E_APP
     assert flmrun.state == flamepy.ApplicationState.ENABLED
-    # Command should use FLAME_HOME environment variable
-    assert flmrun.command == "${FLAME_HOME}/bin/uv"
+    assert flmrun.command == "python3"
 
 
 def test_flmrun_sum_function():

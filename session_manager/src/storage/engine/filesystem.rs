@@ -129,6 +129,8 @@ struct ApplicationMetadata {
     pub delay_release_seconds: i64,
     pub schema: Option<ApplicationSchemaMetadata>,
     pub url: Option<String>,
+    #[serde(default)]
+    pub installer: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -788,6 +790,7 @@ impl FilesystemEngine {
             delay_release: Duration::seconds(meta.delay_release_seconds),
             schema,
             url: meta.url.clone(),
+            installer: meta.installer.clone(),
         })
     }
 
@@ -861,6 +864,7 @@ impl Engine for FilesystemEngine {
             delay_release_seconds: attr.delay_release.num_seconds(),
             schema,
             url: attr.url,
+            installer: attr.installer,
         };
 
         self.write_application_metadata(&name, &meta)?;
@@ -935,6 +939,7 @@ impl Engine for FilesystemEngine {
         meta.delay_release_seconds = attr.delay_release.num_seconds();
         meta.schema = schema;
         meta.url = attr.url;
+        meta.installer = attr.installer;
 
         self.write_application_metadata(&name, &meta)?;
         Self::application_from_metadata(&meta)
@@ -1727,6 +1732,7 @@ mod tests {
             delay_release: Duration::seconds(60),
             schema: None,
             url: None,
+            installer: None,
         };
 
         let app = engine
@@ -1788,6 +1794,7 @@ mod tests {
             delay_release: Duration::seconds(0),
             schema: None,
             url: None,
+            installer: None,
         };
         engine
             .register_application("test-app".to_string(), app_attr)
@@ -1853,6 +1860,7 @@ mod tests {
             delay_release: Duration::seconds(0),
             schema: None,
             url: None,
+            installer: None,
         };
         engine
             .register_application("test-app".to_string(), app_attr)
@@ -1955,6 +1963,7 @@ mod tests {
             delay_release: Duration::seconds(0),
             schema: None,
             url: None,
+            installer: None,
         };
 
         engine
@@ -1988,6 +1997,7 @@ mod tests {
             delay_release: Duration::seconds(0),
             schema: None,
             url: None,
+            installer: None,
         };
         engine
             .register_application("test-app".to_string(), app_attr)
@@ -2030,6 +2040,7 @@ mod tests {
             delay_release: Duration::seconds(0),
             schema: None,
             url: None,
+            installer: None,
         };
         engine
             .register_application("test-app".to_string(), app_attr)
@@ -2089,6 +2100,7 @@ mod tests {
             delay_release: Duration::seconds(0),
             schema: None,
             url: None,
+            installer: None,
         };
         engine
             .register_application("test-app".to_string(), app_attr)
