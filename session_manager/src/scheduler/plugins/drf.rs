@@ -87,10 +87,8 @@ impl Plugin for DRFPlugin {
             self.total.cpu += node.allocatable.cpu;
             self.total.memory += node.allocatable.memory;
             self.total.gpu += node.allocatable.gpu;
-            self.node_allocations.insert(
-                node.name.clone(),
-                ResourceRequirement::default(),
-            );
+            self.node_allocations
+                .insert(node.name.clone(), ResourceRequirement::default());
         }
 
         tracing::debug!(
@@ -109,12 +107,13 @@ impl Plugin for DRFPlugin {
             }
 
             if let Some(ssn_id) = &exec.ssn_id {
-                let entry = self.ssn_map.entry(ssn_id.clone()).or_insert_with(|| {
-                    DRFSessionInfo {
+                let entry = self
+                    .ssn_map
+                    .entry(ssn_id.clone())
+                    .or_insert_with(|| DRFSessionInfo {
                         id: ssn_id.clone(),
                         ..Default::default()
-                    }
-                });
+                    });
                 entry.allocated.cpu += exec.resreq.cpu;
                 entry.allocated.memory += exec.resreq.memory;
                 entry.allocated.gpu += exec.resreq.gpu;
@@ -124,12 +123,13 @@ impl Plugin for DRFPlugin {
         let sessions = ss.find_sessions(OPEN_SESSION)?;
         for ssn in sessions.values() {
             let ssn_id = ssn.id.clone();
-            let entry = self.ssn_map.entry(ssn_id.clone()).or_insert_with(|| {
-                DRFSessionInfo {
+            let entry = self
+                .ssn_map
+                .entry(ssn_id.clone())
+                .or_insert_with(|| DRFSessionInfo {
                     id: ssn.id.clone(),
                     ..Default::default()
-                }
-            });
+                });
             entry.slots = ssn.slots;
             let allocated_clone = entry.allocated.clone();
             let dominant_share = self.calculate_dominant_share(&allocated_clone);
@@ -151,8 +151,16 @@ impl Plugin for DRFPlugin {
     }
 
     fn ssn_order_fn(&self, s1: &SessionInfo, s2: &SessionInfo) -> Option<Ordering> {
-        let ds1 = self.ssn_map.get(&s1.id).map(|s| s.dominant_share).unwrap_or(0.0);
-        let ds2 = self.ssn_map.get(&s2.id).map(|s| s.dominant_share).unwrap_or(0.0);
+        let ds1 = self
+            .ssn_map
+            .get(&s1.id)
+            .map(|s| s.dominant_share)
+            .unwrap_or(0.0);
+        let ds2 = self
+            .ssn_map
+            .get(&s2.id)
+            .map(|s| s.dominant_share)
+            .unwrap_or(0.0);
 
         ds1.partial_cmp(&ds2)
     }

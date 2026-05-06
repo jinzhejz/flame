@@ -319,10 +319,12 @@ mod tests {
             capacity: ResourceRequirement {
                 cpu: 4,
                 memory: 8192,
+                gpu: 0,
             },
             allocatable: ResourceRequirement {
                 cpu: 3,
                 memory: 6144,
+                gpu: 0,
             },
             info: NodeInfo {
                 arch: "x86_64".to_string(),
@@ -360,10 +362,12 @@ mod tests {
             capacity: ResourceRequirement {
                 cpu: 4,
                 memory: 8192,
+                gpu: 0,
             },
             allocatable: ResourceRequirement {
                 cpu: 3,
                 memory: 6144,
+                gpu: 0,
             },
             info: NodeInfo {
                 arch: "x86_64".to_string(),

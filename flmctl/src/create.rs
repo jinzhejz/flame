@@ -40,7 +40,9 @@ pub async fn run(
     )
     .await?;
 
-    let resreq = resreq_str.as_ref().map(|s| ResourceRequirement::from(s.as_str()));
+    let resreq = resreq_str
+        .as_ref()
+        .map(|s| ResourceRequirement::from(s.as_str()));
 
     let attr = SessionAttributes {
         id: format!("{app}-{}", stdng::rand::short_name()),

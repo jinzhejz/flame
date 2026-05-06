@@ -179,7 +179,11 @@ mod tests {
             name: existing_node.name.clone(),
             state: NodeState::NotReady,
             capacity: existing_node.capacity.clone(),
-            allocatable: ResourceRequirement { cpu: 0, memory: 0, gpu: 0 },
+            allocatable: ResourceRequirement {
+                cpu: 0,
+                memory: 0,
+                gpu: 0,
+            },
             info: existing_node.info.clone(),
         };
 

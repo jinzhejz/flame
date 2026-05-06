@@ -466,7 +466,11 @@ mod tests {
     fn create_test_node(name: &str, cpu: u64, memory: u64) -> Arc<NodeInfo> {
         Arc::new(NodeInfo {
             name: name.to_string(),
-            allocatable: ResourceRequirement { cpu, memory, gpu: 0 },
+            allocatable: ResourceRequirement {
+                cpu,
+                memory,
+                gpu: 0,
+            },
             state: NodeState::Ready,
         })
     }
