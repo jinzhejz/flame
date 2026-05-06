@@ -480,17 +480,9 @@ impl ResourceRequirement {
     }
 
     pub fn to_slots(&self, unit: &ResourceRequirement) -> u32 {
-        let cpu_slots = if unit.cpu > 0 {
-            self.cpu / unit.cpu
-        } else {
-            u64::MAX
-        };
+        let cpu_slots = self.cpu.checked_div(unit.cpu).unwrap_or(u64::MAX);
 
-        let mem_slots = if unit.memory > 0 {
-            self.memory / unit.memory
-        } else {
-            u64::MAX
-        };
+        let mem_slots = self.memory.checked_div(unit.memory).unwrap_or(u64::MAX);
 
         let gpu_slots = if unit.gpu > 0 {
             if self.gpu < 0 {
