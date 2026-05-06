@@ -18,7 +18,7 @@ cluster:
 #    key_file: "/etc/flame/certs/server.key"
 #    ca_file: "/etc/flame/certs/ca.crt"
 cache:
-  endpoint: "grpc://flame-executor-manager:9090"
+  endpoint: "grpc://flame-object-cache:9090"
   network_interface: "eth0"
   eviction:
     policy: "lru"
