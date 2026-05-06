@@ -55,6 +55,9 @@ pub type PluginManagerPtr = Arc<PluginManager>;
 /// 2. The next cycle will pick up any changes
 /// 3. Over-allocation is prevented by explicit checks in actions (e.g., max_instances)
 pub trait Plugin: Send + Sync + 'static {
+    /// Returns the plugin's canonical name used in configuration
+    fn name(&self) -> &'static str;
+
     // Installation of plugin
     fn setup(&mut self, ss: &SnapShot) -> Result<(), FlameError>;
 
@@ -109,18 +112,75 @@ pub trait Plugin: Send + Sync + 'static {
     fn on_executor_discard(&mut self, exec: ExecutorInfoPtr, ssn: SessionInfoPtr) {}
 }
 
+type PluginConstructor = fn() -> PluginPtr;
+
+struct PluginInfo {
+    name: &'static str,
+    constructor: PluginConstructor,
+    configurable: bool,
+}
+
+const PLUGIN_REGISTRY: &[PluginInfo] = &[
+    PluginInfo {
+        name: "priority",
+        constructor: PriorityPlugin::new_ptr,
+        configurable: true,
+    },
+    PluginInfo {
+        name: "fairshare",
+        constructor: FairShare::new_ptr,
+        configurable: true,
+    },
+    PluginInfo {
+        name: "gang",
+        constructor: GangPlugin::new_ptr,
+        configurable: true,
+    },
+    PluginInfo {
+        name: "shim",
+        constructor: ShimPlugin::new_ptr,
+        configurable: false,
+    },
+];
+
+pub fn configurable_policy_names() -> Vec<&'static str> {
+    PLUGIN_REGISTRY
+        .iter()
+        .filter(|p| p.configurable)
+        .map(|p| p.name)
+        .collect()
+}
+
 pub struct PluginManager {
     pub plugins: MutexPtr<Vec<(String, PluginPtr)>>,
 }
 
 impl PluginManager {
-    pub fn setup(ss: &SnapShot) -> Result<PluginManagerPtr, FlameError> {
-        let mut plugins: Vec<(String, PluginPtr)> = vec![
-            ("priority".to_string(), PriorityPlugin::new_ptr()),
-            ("fairshare".to_string(), FairShare::new_ptr()),
-            ("shim".to_string(), ShimPlugin::new_ptr()),
-            ("gang".to_string(), GangPlugin::new_ptr()),
-        ];
+    pub fn setup(
+        ss: &SnapShot,
+        enabled_policies: &[String],
+    ) -> Result<PluginManagerPtr, FlameError> {
+        let valid_names = configurable_policy_names();
+
+        for p in enabled_policies {
+            if !valid_names.contains(&p.as_str()) {
+                return Err(FlameError::InvalidConfig(format!(
+                    "unknown policy: {}. available: {:?}",
+                    p, valid_names
+                )));
+            }
+        }
+
+        let mut plugins: Vec<(String, PluginPtr)> = PLUGIN_REGISTRY
+            .iter()
+            .filter(|info| !info.configurable || enabled_policies.iter().any(|p| p == info.name))
+            .map(|info| (info.name.to_string(), (info.constructor)()))
+            .collect();
+
+        tracing::info!(
+            "Enabled scheduler plugins: {:?}",
+            plugins.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
+        );
 
         for (_, plugin) in plugins.iter_mut() {
             plugin.setup(ss)?;
@@ -476,6 +536,13 @@ mod tests {
         })
     }
 
+    fn default_policies() -> Vec<String> {
+        common::ctx::DEFAULT_POLICIES
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
     /// Test that is_available returns true when slots match.
     #[test]
     fn test_is_available_slots_match() {
@@ -483,7 +550,7 @@ mod tests {
             cpu: 1,
             memory: 1024,
         });
-        let pm = PluginManager::setup(&ss).unwrap();
+        let pm = PluginManager::setup(&ss, &default_policies()).unwrap();
 
         let ssn = create_test_session("ssn-1", 2);
         let exec = create_test_executor("exec-1", 2);
@@ -501,7 +568,7 @@ mod tests {
             cpu: 1,
             memory: 1024,
         });
-        let pm = PluginManager::setup(&ss).unwrap();
+        let pm = PluginManager::setup(&ss, &default_policies()).unwrap();
 
         let ssn = create_test_session("ssn-1", 2);
         let exec = create_test_executor("exec-1", 4);
@@ -519,7 +586,7 @@ mod tests {
             cpu: 1,
             memory: 1024,
         });
-        let pm = PluginManager::setup(&ss).unwrap();
+        let pm = PluginManager::setup(&ss, &default_policies()).unwrap();
 
         let ssn = create_test_session("ssn-1", 2);
 
