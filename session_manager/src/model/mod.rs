@@ -128,6 +128,7 @@ pub struct SessionInfo {
     pub max_instances: Option<u32>,
     pub batch_size: u32,
     pub priority: u32,
+    pub resreq: Option<ResourceRequirement>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -233,6 +234,7 @@ impl From<&Session> for SessionInfo {
             max_instances: ssn.max_instances,
             batch_size: ssn.batch_size.max(1),
             priority: ssn.priority,
+            resreq: ssn.resreq.clone(),
         }
     }
 }
@@ -913,6 +915,7 @@ mod tests {
             resreq: ResourceRequirement {
                 cpu: 1,
                 memory: 1024,
+                gpu: 0,
             },
             slots,
             shim: Shim::Host,
@@ -937,6 +940,7 @@ mod tests {
             max_instances: None,
             batch_size: 1,
             priority: 0,
+            resreq: None,
         })
     }
 
@@ -946,6 +950,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         // Add executors with different states
@@ -986,6 +991,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         // Add sessions with different states
@@ -1014,6 +1020,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         // Add an idle executor
@@ -1043,6 +1050,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         // Add executors with different slots
@@ -1079,6 +1087,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         // Add some executors
@@ -1112,6 +1121,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let exec = create_test_executor("exec-1", 2, ExecutorState::Idle);

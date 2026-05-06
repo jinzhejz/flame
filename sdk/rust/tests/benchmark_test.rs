@@ -108,6 +108,7 @@ async fn run_session(
         max_instances: None,
         batch_size: 1,
         priority: 0,
+        resreq: None,
     };
 
     let ssn = conn.create_session(&ssn_attr).await?;
@@ -221,6 +222,7 @@ async fn benchmark_gang_scheduling_no_partial_start() -> Result<(), FlameError> 
         max_instances: None,
         batch_size: BATCH_SIZE,
         priority: 0,
+        resreq: None,
     };
 
     let ssn = conn.create_session(&ssn_attr).await?;

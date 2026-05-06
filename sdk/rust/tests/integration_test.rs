@@ -84,6 +84,7 @@ async fn test_create_session() -> Result<(), FlameError> {
         max_instances: None,
         batch_size: 1,
         priority: 0,
+        resreq: None,
     };
     let ssn = conn.create_session(&ssn_attr).await?;
 
@@ -110,6 +111,7 @@ async fn test_create_multiple_sessions() -> Result<(), FlameError> {
             max_instances: None,
             batch_size: 1,
             priority: 0,
+            resreq: None,
         };
         let ssn = conn.create_session(&ssn_attr).await?;
 
@@ -134,6 +136,7 @@ async fn test_create_session_with_tasks() -> Result<(), FlameError> {
         max_instances: None,
         batch_size: 1,
         priority: 0,
+        resreq: None,
     };
     let ssn = conn.create_session(&ssn_attr).await?;
 
@@ -196,6 +199,7 @@ async fn test_create_multiple_sessions_with_tasks() -> Result<(), FlameError> {
         max_instances: None,
         batch_size: 1,
         priority: 0,
+        resreq: None,
     };
     let ssn_1 = conn.create_session(&ssn_1_attr).await?;
     assert_eq!(ssn_1.state, SessionState::Open);
@@ -209,6 +213,7 @@ async fn test_create_multiple_sessions_with_tasks() -> Result<(), FlameError> {
         max_instances: None,
         batch_size: 1,
         priority: 0,
+        resreq: None,
     };
     let ssn_2 = conn.create_session(&ssn_2_attr).await?;
     assert_eq!(ssn_2.state, SessionState::Open);
@@ -322,6 +327,7 @@ async fn test_batch_session() -> Result<(), FlameError> {
         max_instances: None,
         batch_size: 2,
         priority: 0,
+        resreq: None,
     };
     let ssn = conn.create_session(&ssn_attr).await?;
 

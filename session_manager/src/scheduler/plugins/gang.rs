@@ -147,6 +147,7 @@ mod tests {
             max_instances: None,
             batch_size,
             priority: 0,
+            resreq: None,
         })
     }
 
@@ -157,6 +158,7 @@ mod tests {
             resreq: ResourceRequirement {
                 cpu: 1,
                 memory: 1024,
+                gpu: 0,
             },
             slots: 1,
             shim: Shim::Host,
@@ -173,6 +175,7 @@ mod tests {
             allocatable: ResourceRequirement {
                 cpu: 4,
                 memory: 8192,
+                gpu: 0,
             },
             state: common::apis::NodeState::Ready,
         })
@@ -183,6 +186,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let ssn = create_test_session("ssn-1", 1);
@@ -206,6 +210,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let ssn = create_test_session("ssn-1", 2);
@@ -233,6 +238,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let ssn = create_test_session("ssn-1", 2);
@@ -259,6 +265,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let ssn = create_test_session("ssn-1", 1);
@@ -282,6 +289,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let ssn = create_test_session("ssn-1", 2);
@@ -309,6 +317,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let ssn = create_test_session("ssn-1", 2);
@@ -335,6 +344,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let ssn = create_test_session("ssn-1", 2);
@@ -368,6 +378,7 @@ mod tests {
         let ss = SnapShot::new(ResourceRequirement {
             cpu: 1,
             memory: 1024,
+            gpu: 0,
         });
 
         let ssn = create_test_session("ssn-1", 2);
