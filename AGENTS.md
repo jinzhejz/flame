@@ -1,4 +1,4 @@
-# Flame – A Distributed System for Agentic AI
+# Flame – A distributed engine for AI
 
 Repo: https://github.com/xflops-io/flame
 
