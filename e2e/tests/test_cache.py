@@ -168,24 +168,39 @@ def test_incremental_get_applies_remote_patch_only_response():
     """Test a cached client applies only patches appended by another client."""
     key_prefix = f"test-app/test-incremental-patch-{uuid.uuid4().hex[:8]}"
     base_data = {"items": ["base"]}
-    delta_data = {"items": ["patch-1"]}
+    delta_data_1 = {"items": ["patch-1"]}
+    delta_data_2 = {"items": ["patch-2"]}
 
     ref = put_object(key_prefix, base_data)
     assert get_object(ref, deserializer=_raw_deserializer) == {"base": base_data, "deltas": []}
 
-    patched_ref = _remote_patch_without_local_cache_invalidation(ref, delta_data)
+    patched_ref = _remote_patch_without_local_cache_invalidation(ref, delta_data_1)
     fetch_result = cache_module._fetch_object_data(ref, ref.version)
 
     assert fetch_result.mode == cache_module.FetchMode.PATCHES
     assert fetch_result.version == patched_ref.version
-    assert [patch.data for patch in fetch_result.patches] == [delta_data]
+    assert [patch.data for patch in fetch_result.patches] == [delta_data_1]
 
     result = get_object(ref, deserializer=_raw_deserializer)
-    assert result == {"base": base_data, "deltas": [delta_data]}
+    assert result == {"base": base_data, "deltas": [delta_data_1]}
 
     cached = _cached_object(ref)
     assert cached.version == patched_ref.version
-    assert [patch.data for patch in cached.patches] == [delta_data]
+    assert [patch.data for patch in cached.patches] == [delta_data_1]
+
+    patched_ref_2 = _remote_patch_without_local_cache_invalidation(ref, delta_data_2)
+    second_fetch_result = cache_module._fetch_object_data(ref, cached.version)
+
+    assert second_fetch_result.mode == cache_module.FetchMode.PATCHES
+    assert second_fetch_result.version == patched_ref_2.version
+    assert [patch.data for patch in second_fetch_result.patches] == [delta_data_2]
+
+    result = get_object(ref, deserializer=_raw_deserializer)
+    assert result == {"base": base_data, "deltas": [delta_data_1, delta_data_2]}
+
+    cached = _cached_object(ref)
+    assert cached.version == patched_ref_2.version
+    assert [patch.data for patch in cached.patches] == [delta_data_1, delta_data_2]
 
 
 def test_version_zero_forces_full_response_with_cached_object():

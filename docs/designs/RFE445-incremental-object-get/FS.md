@@ -406,7 +406,7 @@ No new auth surface. Ticket parsing must continue to validate `ObjectKey` before
 
 **Observability:**
 
-Add debug logs and optional counters for:
+Add debug logs. Optional cache counters can be added before formal replay-buffer benchmarking for:
 
 - `get_object_not_modified_total`
 - `get_object_patch_response_total`
@@ -469,7 +469,7 @@ Version requirements:
 
 - Put base, patch twice, read from one Python process twice, verify the second read fetches only the second patch.
 - Put base, read, update base, read again, verify full response and correct final data.
-- Replay buffer smoke test with metrics enabled verifies full/patch/not-modified counters are internally consistent.
+- Replay buffer benchmark mode writes configured per-iteration metrics and preserves workload correctness.
 
 ## 4. Use Cases
 
@@ -511,10 +511,13 @@ Expected outcome: same behavior as current RFE426 cache hits.
 
 **Metrics:**
 
-Primary read-path metrics:
+Primary read-path metrics available from the replay-buffer benchmark hooks:
+
+- `get_object` latency for `ReplayBuffer.state()` and `ReplayBuffer.sample()`.
+
+Optional cache-observability metrics to add before collecting formal numbers:
 
 - Total bytes downloaded by `get_object`.
-- `get_object` latency for `ReplayBuffer.state()` and `ReplayBuffer.sample()`.
 - Deserializer/materialization CPU time inside `_fetch()`.
 - Base size, patch count, and patch rows downloaded per read.
 - Number of full, patch-only, and not-modified responses.

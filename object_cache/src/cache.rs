@@ -241,9 +241,7 @@ impl Object {
     pub fn current_version(&self) -> u64 {
         self.deltas
             .iter()
-            .map(|delta| delta.version)
-            .max()
-            .unwrap_or(self.version)
+            .fold(self.version, |current, delta| current.max(delta.version))
     }
 }
 
@@ -1496,6 +1494,14 @@ mod tests {
             assert_eq!(obj.deltas.len(), 2);
             assert_eq!(obj.deltas[0].data, vec![4, 5]);
             assert_eq!(obj.deltas[1].data, vec![6, 7]);
+        }
+
+        #[test]
+        fn current_version_includes_base_version() {
+            let delta = Object::new(3, vec![4, 5]);
+            let obj = Object::with_deltas(5, vec![1, 2, 3], vec![delta]);
+
+            assert_eq!(obj.current_version(), 5);
         }
 
         #[test]

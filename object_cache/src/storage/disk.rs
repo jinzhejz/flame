@@ -327,8 +327,23 @@ fn read_deltas_sync(delta_dir: &Path, base_version: u64) -> Result<Vec<Object>, 
             delta.version = base_version + idx as u64 + 1;
         }
     }
+    validate_delta_versions(&deltas, base_version)?;
 
     Ok(deltas)
+}
+
+fn validate_delta_versions(deltas: &[Object], base_version: u64) -> Result<(), FlameError> {
+    let mut previous_version = base_version;
+    for delta in deltas {
+        if delta.version <= previous_version {
+            return Err(FlameError::InvalidState(format!(
+                "Patch versions must be strictly increasing after base version {}; found {} after {}",
+                base_version, delta.version, previous_version
+            )));
+        }
+        previous_version = delta.version;
+    }
+    Ok(())
 }
 
 fn write_batch_to_file(path: &Path, batch: &RecordBatch) -> Result<(), FlameError> {
@@ -482,6 +497,26 @@ mod tests {
         assert_eq!(loaded.deltas.len(), 2);
         assert_eq!(loaded.deltas[0].version, 6);
         assert_eq!(loaded.deltas[1].version, 7);
+    }
+
+    #[tokio::test]
+    async fn test_disk_storage_rejects_non_monotonic_delta_versions() {
+        let temp_dir = tempdir().unwrap();
+        let storage = DiskStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let key = test_key("test-app", "test-session", "obj1");
+        storage
+            .write_object(&key, &Object::new(5, vec![1, 2, 3]))
+            .await
+            .unwrap();
+        storage
+            .patch_object(&key, &Object::new(4, vec![4]))
+            .await
+            .unwrap();
+
+        let result = storage.read_object(&key).await;
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]
