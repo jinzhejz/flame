@@ -83,6 +83,7 @@ from .types import (
     FlameErrorCode,
     FlamePackage,
     Message,
+    ResourceRequirement,
     SessionAttributes,
     SessionID,
     SessionState,
@@ -119,6 +120,7 @@ __all__ = [
     "FlameError",
     # Data classes
     "Event",
+    "ResourceRequirement",
     "SessionAttributes",
     "ApplicationSchema",
     "ApplicationAttributes",

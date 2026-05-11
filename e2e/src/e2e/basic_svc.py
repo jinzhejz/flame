@@ -25,6 +25,7 @@ from e2e.api import (
     TestResponse,
 )
 from e2e.helpers import (
+    FAIL_INPUT,
     deserialize_common_data,
     deserialize_request,
     serialize_response,
@@ -65,6 +66,9 @@ class BasicTestService(flamepy.FlameService):
             logger.debug(f"Request deserialized: input={request.input}, update_common_data={request.update_common_data}, request_task_context={request.request_task_context}, request_session_context={request.request_session_context}, request_application_context={request.request_application_context}")
         else:
             logger.debug("No input provided for this task")
+
+        if request and request.input == FAIL_INPUT:
+            raise ValueError("Requested failure for E2E test")
 
         # Get common data using helper function
         common_data = None

@@ -43,6 +43,7 @@ from .core import (  # Type aliases; Constants; Enums; Exception classes; Data c
     FlameService,
     Message,
     ObjectRef,
+    ResourceRequirement,
     Session,
     SessionAttributes,
     SessionContext,
@@ -73,7 +74,7 @@ from .core import (  # Type aliases; Constants; Enums; Exception classes; Data c
     update_object,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"
 
 __all__ = [
     # Type aliases
@@ -98,6 +99,7 @@ __all__ = [
     "FlameError",
     # Data classes
     "Event",
+    "ResourceRequirement",
     "SessionAttributes",
     "ApplicationSchema",
     "ApplicationAttributes",

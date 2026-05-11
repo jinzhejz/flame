@@ -11,6 +11,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import time
+import uuid
+
 import pytest
 from flamepy.core import FlameContext, ObjectRef, get_object, patch_object, put_object, update_object
 
@@ -313,3 +316,276 @@ def test_patch_large_number_of_deltas():
 def test_patch_max_deltas_limit():
     """Test that patching beyond MAX_DELTAS_PER_OBJECT (1000) raises an error."""
     pass
+
+
+# ============================================================================
+# Cache Pressure Retrieval Tests
+# ============================================================================
+
+"""
+Integration stress tests for object retrieval under cache pressure.
+
+These tests intentionally assert only observable cache behavior through the
+public API: objects remain retrievable and data stays intact after many writes.
+The actual LRU eviction policy and ordering are covered by object_cache unit
+tests, where cache limits and policy internals are directly configurable.
+"""
+
+TEST_APP = "cache-pressure-test-app"
+TEST_SESSION_PREFIX = "cache-pressure-test-ssn"
+
+
+def generate_session_id() -> str:
+    """Generate a unique key prefix in <app>/<ssn> format for testing."""
+    return f"{TEST_APP}/{TEST_SESSION_PREFIX}-{uuid.uuid4().hex[:8]}"
+
+
+def create_large_object(size_kb: int) -> dict:
+    """Create a test object of approximately the specified size in KB.
+
+    Args:
+        size_kb: Approximate size of the object in kilobytes
+
+    Returns:
+        A dictionary containing padding data to reach the target size
+    """
+    padding_size = size_kb * 1024
+    return {
+        "id": str(uuid.uuid4()),
+        "timestamp": time.time(),
+        "padding": "x" * padding_size,
+    }
+
+
+class TestCachePressureRetrieval:
+    """Test cache retrieval behavior after many writes."""
+
+    def test_objects_remain_retrievable_after_many_writes(self):
+        """Test that objects remain retrievable after writing many objects."""
+        session_id = generate_session_id()
+
+        object_refs = []
+        num_objects = 15
+
+        for i in range(num_objects):
+            obj = create_large_object(size_kb=100)
+            obj["sequence"] = i
+            ref = put_object(session_id, obj)
+            object_refs.append(ref)
+
+        for i, ref in enumerate(object_refs):
+            retrieved = get_object(ref)
+            assert retrieved["sequence"] == i, f"Object {i} data mismatch"
+
+    def test_accessed_objects_remain_retrievable_after_more_writes(self):
+        """Test that accessed objects remain retrievable after more writes."""
+        session_id = generate_session_id()
+
+        object_refs = []
+        for i in range(5):
+            obj = create_large_object(size_kb=100)
+            obj["sequence"] = i
+            ref = put_object(session_id, obj)
+            object_refs.append(ref)
+
+        _ = get_object(object_refs[0])
+        _ = get_object(object_refs[2])
+
+        for i in range(5, 15):
+            obj = create_large_object(size_kb=100)
+            obj["sequence"] = i
+            ref = put_object(session_id, obj)
+            object_refs.append(ref)
+
+        for i, ref in enumerate(object_refs):
+            retrieved = get_object(ref)
+            assert retrieved["sequence"] == i, f"Object {i} data mismatch after more writes"
+
+    def test_early_object_remains_retrievable_after_many_writes(self):
+        """Test that an early object remains retrievable after many writes."""
+        session_id = generate_session_id()
+
+        test_marker = str(uuid.uuid4())
+
+        first_obj = create_large_object(size_kb=100)
+        first_obj["marker"] = test_marker
+        first_obj["position"] = "first"
+        first_ref = put_object(session_id, first_obj)
+
+        for i in range(20):
+            obj = create_large_object(size_kb=100)
+            obj["filler"] = i
+            put_object(session_id, obj)
+
+        retrieved = get_object(first_ref)
+        assert retrieved["marker"] == test_marker, "First object marker mismatch"
+        assert retrieved["position"] == "first", "First object position mismatch"
+
+    def test_repeatedly_accessed_object_remains_retrievable(self):
+        """Test that repeated access does not corrupt object retrieval."""
+        session_id = generate_session_id()
+
+        hot_obj = create_large_object(size_kb=50)
+        hot_obj["type"] = "hot"
+        hot_ref = put_object(session_id, hot_obj)
+
+        for i in range(20):
+            obj = create_large_object(size_kb=100)
+            obj["sequence"] = i
+            put_object(session_id, obj)
+
+            if i % 3 == 0:
+                retrieved = get_object(hot_ref)
+                assert retrieved["type"] == "hot", "Hot object data corrupted"
+
+        final_retrieved = get_object(hot_ref)
+        assert final_retrieved["type"] == "hot", "Hot object not preserved"
+
+
+class TestCachePressureEdgeCases:
+    """Test cache retrieval edge cases under write pressure."""
+
+    def test_single_large_object(self):
+        """Test handling of a single object that approaches memory limit."""
+        session_id = generate_session_id()
+
+        large_obj = create_large_object(size_kb=500)
+        large_obj["type"] = "large"
+        ref = put_object(session_id, large_obj)
+
+        retrieved = get_object(ref)
+        assert retrieved["type"] == "large"
+
+    def test_many_small_objects(self):
+        """Test retrieval with many small objects."""
+        session_id = generate_session_id()
+
+        object_refs = []
+        for i in range(100):
+            obj = {"id": i, "data": "x" * 1024}
+            ref = put_object(session_id, obj)
+            object_refs.append(ref)
+
+        for i, ref in enumerate(object_refs):
+            retrieved = get_object(ref)
+            assert retrieved["id"] == i
+
+    def test_object_update_remains_retrievable_after_more_writes(self):
+        """Test that an updated object remains retrievable after more writes."""
+        session_id = generate_session_id()
+
+        refs = []
+        for i in range(5):
+            obj = {"sequence": i, "version": 1}
+            ref = put_object(session_id, obj)
+            refs.append(ref)
+
+        updated_obj = {"sequence": 0, "version": 2}
+        refs[0] = update_object(refs[0], updated_obj)
+
+        for i in range(5, 15):
+            obj = create_large_object(size_kb=100)
+            obj["sequence"] = i
+            put_object(session_id, obj)
+
+        retrieved = get_object(refs[0])
+        assert retrieved["sequence"] == 0
+        assert retrieved["version"] == 2, "Updated object should have new version"
+
+    def test_concurrent_session_isolation(self):
+        """Test that cache keys are isolated per session."""
+        session_id_1 = generate_session_id()
+        session_id_2 = generate_session_id()
+
+        refs_1 = []
+        for i in range(5):
+            obj = {"session": 1, "sequence": i}
+            ref = put_object(session_id_1, obj)
+            refs_1.append(ref)
+
+        refs_2 = []
+        for i in range(5):
+            obj = {"session": 2, "sequence": i}
+            ref = put_object(session_id_2, obj)
+            refs_2.append(ref)
+
+        for i, ref in enumerate(refs_1):
+            retrieved = get_object(ref)
+            assert retrieved["session"] == 1
+            assert retrieved["sequence"] == i
+
+        for i, ref in enumerate(refs_2):
+            retrieved = get_object(ref)
+            assert retrieved["session"] == 2
+            assert retrieved["sequence"] == i
+
+
+class TestCachePressureDataIntegrity:
+    """Test data integrity after repeated cache writes."""
+
+    def test_retrieval_preserves_data_integrity_after_many_writes(self):
+        """Test that retrieved objects have identical data to originals."""
+        session_id = generate_session_id()
+
+        original_obj = {
+            "string": "test string with special chars: äöü",
+            "number": 42.5,
+            "list": [1, 2, 3, {"nested": "value"}],
+            "dict": {"key1": "value1", "key2": [4, 5, 6]},
+            "none": None,
+            "bool": True,
+        }
+        ref = put_object(session_id, original_obj)
+
+        for i in range(20):
+            obj = create_large_object(size_kb=100)
+            put_object(session_id, obj)
+
+        retrieved = get_object(ref)
+        assert retrieved["string"] == original_obj["string"]
+        assert retrieved["number"] == original_obj["number"]
+        assert retrieved["list"] == original_obj["list"]
+        assert retrieved["dict"] == original_obj["dict"]
+        assert retrieved["none"] is None
+        assert retrieved["bool"] is True
+
+    def test_retrieval_after_multiple_write_cycles(self):
+        """Test that objects remain retrievable across multiple write cycles."""
+        session_id = generate_session_id()
+
+        target_obj = {"target": True, "id": str(uuid.uuid4())}
+        target_ref = put_object(session_id, target_obj)
+
+        for cycle in range(3):
+            for i in range(10):
+                obj = create_large_object(size_kb=100)
+                obj["cycle"] = cycle
+                obj["index"] = i
+                put_object(session_id, obj)
+
+            retrieved = get_object(target_ref)
+            assert retrieved["target"] is True, f"Target object corrupted in cycle {cycle}"
+            assert retrieved["id"] == target_obj["id"], f"Target ID mismatch in cycle {cycle}"
+
+    def test_mixed_access_pattern_preserves_data(self):
+        """Test that mixed access and write patterns preserve data."""
+        session_id = generate_session_id()
+
+        markers = ["alpha", "beta", "gamma", "delta", "epsilon"]
+        refs = {}
+
+        for marker in markers:
+            obj = {"marker": marker, "padding": "x" * 10000}
+            ref = put_object(session_id, obj)
+            refs[marker] = ref
+
+        for marker in ["gamma", "alpha", "epsilon"]:
+            _ = get_object(refs[marker])
+
+        for i in range(15):
+            obj = create_large_object(size_kb=100)
+            put_object(session_id, obj)
+
+        for marker in markers:
+            retrieved = get_object(refs[marker])
+            assert retrieved["marker"] == marker, f"Object {marker} data mismatch"

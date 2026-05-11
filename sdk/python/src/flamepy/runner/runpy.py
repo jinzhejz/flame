@@ -44,6 +44,34 @@ class FlameRunpyService(FlameService):
         self._execution_object: Any = None
         self._runner_context: RunnerContext = None
 
+    def _load_runner_context(self) -> RunnerContext:
+        """Load the latest RunnerContext from the session common data object."""
+        common_data_bytes = self._ssn_ctx.common_data()
+        if common_data_bytes is None:
+            raise ValueError("Common data is None in session context")
+
+        object_ref = ObjectRef.decode(common_data_bytes)
+        serialized_ctx = get_object(object_ref)
+        runner_context = cloudpickle.loads(serialized_ctx)
+
+        if not isinstance(runner_context, RunnerContext):
+            raise ValueError(f"Expected RunnerContext in common_data, got {type(runner_context)}")
+
+        return runner_context
+
+    def _set_execution_from_context(self, runner_context: RunnerContext) -> None:
+        """Install the execution object from a RunnerContext into this service."""
+        execution_object = runner_context.execution_object
+        if execution_object is None:
+            raise ValueError("Execution object is None in RunnerContext")
+
+        if inspect.isclass(execution_object):
+            logger.info(f"Instantiating class {execution_object.__name__}")
+            execution_object = execution_object()
+
+        self._runner_context = runner_context
+        self._execution_object = execution_object
+
     def _resolve_object_ref(self, value: Any) -> Any:
         """
         Resolve an ObjectRef to its actual value by fetching from cache.
@@ -194,36 +222,8 @@ class FlameRunpyService(FlameService):
         # Store the session context for use in task invocation
         self._ssn_ctx = context
 
-        # Load RunnerContext from common_data
-        common_data_bytes = context.common_data()
-        if common_data_bytes is None:
-            raise ValueError("Common data is None in session context")
-
-        # Decode bytes to ObjectRef
-        object_ref = ObjectRef.decode(common_data_bytes)
-        # Get from cache
-        serialized_ctx = get_object(object_ref)
-        # Deserialize using cloudpickle
-        runner_context = cloudpickle.loads(serialized_ctx)
-
-        if not isinstance(runner_context, RunnerContext):
-            raise ValueError(f"Expected RunnerContext in common_data, got {type(runner_context)}")
-
-        # Step 2: Store configuration
-        self._runner_context = runner_context
-
-        # Step 3: Load execution object
-        execution_object = runner_context.execution_object
-        if execution_object is None:
-            raise ValueError("Execution object is None in RunnerContext")
-
-        # Step 4: If it's a class, instantiate it
-        if inspect.isclass(execution_object):
-            logger.info(f"Instantiating class {execution_object.__name__}")
-            execution_object = execution_object()  # Use default constructor
-
-        # Step 5: Store execution object for reuse
-        self._execution_object = execution_object
+        runner_context = self._load_runner_context()
+        self._set_execution_from_context(runner_context)
 
         logger.info(f"Session entered successfully, execution object loaded (stateful={runner_context.stateful}, autoscale={runner_context.autoscale})")
         return True
@@ -252,6 +252,11 @@ class FlameRunpyService(FlameService):
         logger.info(f"Invoking task: {context.task_id}")
 
         try:
+            if self._runner_context.stateful:
+                logger.debug("Refreshing stateful execution object from cache")
+                runner_context = self._load_runner_context()
+                self._set_execution_from_context(runner_context)
+
             # Step 1: Use cached execution object (not from common_data)
             execution_object = self._execution_object
             if execution_object is None:
@@ -324,6 +329,7 @@ class FlameRunpyService(FlameService):
                     execution_object=execution_object,  # Updated object
                     stateful=self._runner_context.stateful,
                     autoscale=self._runner_context.autoscale,
+                    warmup=self._runner_context.warmup,
                 )
                 # For RL module: serialize RunnerContext with cloudpickle, update in cache to get ObjectRef,
                 # then encode ObjectRef to bytes for core API
@@ -333,6 +339,8 @@ class FlameRunpyService(FlameService):
                 common_data_bytes = self._ssn_ctx.common_data()
                 object_ref = ObjectRef.decode(common_data_bytes)
                 update_object(object_ref, serialized_ctx)
+                self._runner_context = updated_context
+                self._execution_object = execution_object
                 logger.debug("Execution object state persisted successfully in cache")
             else:
                 logger.debug("Skipping state persistence for non-stateful service")

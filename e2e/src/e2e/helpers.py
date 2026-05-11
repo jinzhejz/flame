@@ -21,6 +21,8 @@ from e2e.api import (
     TestResponse,
 )
 
+FAIL_INPUT = "__flame_e2e_fail__"
+
 
 def sum_func(a: int, b: int) -> int:
     """Sum two integers."""
