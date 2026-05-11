@@ -22,6 +22,7 @@ from e2e.helpers import (
 from tests.utils import random_string
 
 FLM_TEST_SVC_APP = "flme2e-svc"
+TASK_FAILED_EVENT_CODE = int(flamepy.TaskState.FAILED)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -419,7 +420,7 @@ def test_task_invoke_exception_handling():
         # Verify error message is recorded in events
 
         # Check events from refreshed task
-        error_events = [e for e in refreshed_task.events if e.code == flamepy.TaskState.FAILED or e.code == 3]
+        error_events = [e for e in refreshed_task.events if e.code == TASK_FAILED_EVENT_CODE]
         assert len(error_events) > 0, f"Should have at least one FAILED event, got events: {[(e.code, e.message) for e in refreshed_task.events]}"
 
         # Check that the error message contains the exception message from Python service

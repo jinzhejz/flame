@@ -1,7 +1,10 @@
 import time
 from datetime import datetime, timezone
 
+import pytest
+
 import flamepy.core.client as client
+from flamepy.core.types import FlameError, FlameErrorCode
 
 
 class DummyChannel:
@@ -18,7 +21,6 @@ class DummyFrontend:
 
 
 def test_connection_connect_http(monkeypatch):
-    # Patch grpc module to avoid real network
     import grpc
 
     monkeypatch.setattr(grpc, "insecure_channel", lambda loc: DummyChannel(loc))
@@ -58,7 +60,6 @@ def test_connection_connect_https_with_tls(monkeypatch, tmp_path):
     monkeypatch.setattr("flamepy.core.client.FrontendStub", lambda channel: DummyFrontend())
 
     tls = client.FlameClientTls(ca_file=str(tmp_path / "ca.pem"))
-    # create temp ca file
     (tmp_path / "ca.pem").write_text("CERT")
     tls.ca_file = str(tmp_path / "ca.pem")
     conn = client.Connection.connect("https://localhost:1234", tls_config=tls)
@@ -70,10 +71,19 @@ def test_connection_connect_https_with_tls(monkeypatch, tmp_path):
 def test_session_create_task_with_mocked_frontend(monkeypatch):
 
     class DummyFrontend:
-        def CreateTask(self, req):  # noqa: N802 - matches gRPC stub name
+        def CreateTask(self, req):  # noqa: N802
+            class StatusMock:
+                state = 0
+                creation_time = int(time.time() * 1000)
+                completion_time = int(time.time() * 1000)
+                events = []
+
+                def HasField(self, name):  # noqa: N802
+                    return name == "completion_time"
+
             class Resp:
                 metadata = type("M", (), {"id": "tid-1"})
-                status = type("S", (), {"state": 0, "creation_time": int(time.time() * 1000), "completion_time": int(time.time() * 1000), "events": []})()
+                status = StatusMock()
 
             return Resp()
 
@@ -95,3 +105,189 @@ def test_session_create_task_with_mocked_frontend(monkeypatch):
     t = s.create_task(b"input")
     assert t.session_id == s.id
     assert t.id is not None
+
+
+class TestConnectionValidation:
+    def test_connection_rejects_empty_address(self):
+        with pytest.raises(FlameError) as exc_info:
+            client.Connection.connect("")
+        assert exc_info.value.code == FlameErrorCode.INVALID_CONFIG
+
+    def test_connection_handles_timeout(self, monkeypatch):
+        import grpc
+
+        monkeypatch.setattr(grpc, "insecure_channel", lambda loc: DummyChannel(loc))
+
+        class TimeoutFuture:
+            def result(self, timeout=None):
+                raise grpc.FutureTimeoutError()
+
+        monkeypatch.setattr(grpc, "channel_ready_future", lambda ch: TimeoutFuture())
+
+        with pytest.raises(FlameError) as exc_info:
+            client.Connection.connect("http://localhost:1234")
+        assert "timeout" in str(exc_info.value).lower()
+
+
+class TestSessionOperations:
+    def create_test_session(self, connection=None):
+        from flamepy.core.client import Session, SessionState
+
+        if connection is None:
+            connection = type("Conn", (), {"_frontend": DummyFrontend(), "_executor": None, "close": lambda self: None})()
+
+        return Session(
+            connection=connection,
+            id="sess-test",
+            application="test-app",
+            state=SessionState.OPEN,
+            creation_time=datetime.now(timezone.utc),
+            pending=0,
+            running=0,
+            succeed=0,
+            failed=0,
+            completion_time=None,
+        )
+
+    def test_session_common_data_returns_none_by_default(self):
+        session = self.create_test_session()
+        assert session.common_data() is None
+
+    def test_session_common_data_returns_bytes(self):
+        from flamepy.core.client import Session, SessionState
+
+        connection = type("Conn", (), {"_frontend": DummyFrontend(), "_executor": None, "close": lambda self: None})()
+        session = Session(
+            connection=connection,
+            id="sess-test",
+            application="test-app",
+            state=SessionState.OPEN,
+            creation_time=datetime.now(timezone.utc),
+            pending=0,
+            running=0,
+            succeed=0,
+            failed=0,
+            completion_time=None,
+            common_data=b"test-data",
+        )
+        assert session.common_data() == b"test-data"
+
+    def test_session_create_task_rejects_non_bytes(self):
+        session = self.create_test_session()
+        with pytest.raises(FlameError) as exc_info:
+            session.create_task("not bytes")
+        assert exc_info.value.code == FlameErrorCode.INVALID_ARGUMENT
+
+
+class TestGrpcErrorMapping:
+    def test_not_found_error_mapping(self):
+        import grpc
+
+        class FakeRpcError(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.NOT_FOUND
+
+            def details(self):
+                return "Resource not found"
+
+        error = client.Connection._grpc_error_to_flame_error(FakeRpcError(), "test operation")
+        assert error.code == FlameErrorCode.NOT_FOUND
+
+    def test_already_exists_error_mapping(self):
+        import grpc
+
+        class FakeRpcError(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.ALREADY_EXISTS
+
+            def details(self):
+                return "Already exists"
+
+        error = client.Connection._grpc_error_to_flame_error(FakeRpcError(), "test operation")
+        assert error.code == FlameErrorCode.ALREADY_EXISTS
+
+    def test_invalid_argument_error_mapping(self):
+        import grpc
+
+        class FakeRpcError(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.INVALID_ARGUMENT
+
+            def details(self):
+                return "Invalid argument"
+
+        error = client.Connection._grpc_error_to_flame_error(FakeRpcError(), "test operation")
+        assert error.code == FlameErrorCode.INVALID_ARGUMENT
+
+    def test_failed_precondition_error_mapping(self):
+        import grpc
+
+        class FakeRpcError(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.FAILED_PRECONDITION
+
+            def details(self):
+                return "Precondition failed"
+
+        error = client.Connection._grpc_error_to_flame_error(FakeRpcError(), "test operation")
+        assert error.code == FlameErrorCode.INVALID_STATE
+
+    def test_unknown_error_mapping(self):
+        import grpc
+
+        class FakeRpcError(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.UNKNOWN
+
+            def details(self):
+                return "Unknown error"
+
+        error = client.Connection._grpc_error_to_flame_error(FakeRpcError(), "test operation")
+        assert error.code == FlameErrorCode.INTERNAL
+
+
+class TestTaskWatcher:
+    def test_task_watcher_iteration(self):
+        from flamepy.core.client import TaskWatcher
+
+        class FakeStream:
+            def __init__(self):
+                self.items = []
+                self.index = 0
+
+            def __next__(self):
+                if self.index >= len(self.items):
+                    raise StopIteration
+                item = self.items[self.index]
+                self.index += 1
+                return item
+
+        stream = FakeStream()
+        watcher = TaskWatcher(stream)
+        assert iter(watcher) is watcher
+
+    def test_task_watcher_timeout_check(self):
+        from flamepy.core.client import TaskWatcher
+
+        class EmptyStream:
+            def __next__(self):
+                raise StopIteration
+
+        watcher = TaskWatcher(EmptyStream(), timeout=0.001)
+        import time as time_module
+
+        time_module.sleep(0.01)
+        with pytest.raises(TimeoutError):
+            next(watcher)
+
+
+class TestTaskIterator:
+    def test_task_iterator_is_iterable(self):
+        from flamepy.core.client import TaskIterator
+
+        class FakeStream:
+            def __next__(self):
+                raise StopIteration
+
+        iterator = TaskIterator(FakeStream(), "sess-1")
+        assert iter(iterator) is iterator

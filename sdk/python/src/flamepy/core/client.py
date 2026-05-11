@@ -98,15 +98,17 @@ def create_session(
                 fallback when that is unset).
     """
     conn = ConnectionInstance.instance()
-    return conn.create_session(SessionAttributes(
-        id=session_id,
-        application=application,
-        common_data=common_data,
-        min_instances=min_instances,
-        max_instances=max_instances,
-        batch_size=batch_size,
-        resreq=resreq,
-    ))
+    return conn.create_session(
+        SessionAttributes(
+            id=session_id,
+            application=application,
+            common_data=common_data,
+            min_instances=min_instances,
+            max_instances=max_instances,
+            batch_size=batch_size,
+            resreq=resreq,
+        )
+    )
 
 
 def open_session(session_id: SessionID, spec: Optional[SessionAttributes] = None) -> "Session":
@@ -439,11 +441,13 @@ class Connection:
             batch_size=attrs.batch_size,
         )
         if attrs.resreq is not None:
-            session_spec.resreq.CopyFrom(ResourceRequirementProto(
-                cpu=attrs.resreq.cpu,
-                memory=attrs.resreq.memory,
-                gpu=attrs.resreq.gpu,
-            ))
+            session_spec.resreq.CopyFrom(
+                ResourceRequirementProto(
+                    cpu=attrs.resreq.cpu,
+                    memory=attrs.resreq.memory,
+                    gpu=attrs.resreq.gpu,
+                )
+            )
 
         request = CreateSessionRequest(session_id=session_id, session=session_spec)
 
@@ -523,11 +527,13 @@ class Connection:
                 batch_size=spec.batch_size,
             )
             if spec.resreq is not None:
-                session_spec.resreq.CopyFrom(ResourceRequirementProto(
-                    cpu=spec.resreq.cpu,
-                    memory=spec.resreq.memory,
-                    gpu=spec.resreq.gpu,
-                ))
+                session_spec.resreq.CopyFrom(
+                    ResourceRequirementProto(
+                        cpu=spec.resreq.cpu,
+                        memory=spec.resreq.memory,
+                        gpu=spec.resreq.gpu,
+                    )
+                )
 
         request = OpenSessionRequest(session_id=session_id, session=session_spec)
 

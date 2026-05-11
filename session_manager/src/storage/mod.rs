@@ -990,6 +990,21 @@ mod node_tests;
 mod node_executor_tests;
 
 #[cfg(test)]
+mod application_tests;
+
+#[cfg(test)]
+mod executor_tests;
+
+#[cfg(test)]
+mod session_tests;
+
+#[cfg(test)]
+mod snapshot_tests;
+
+#[cfg(test)]
+mod task_tests;
+
+#[cfg(test)]
 mod session_limit_tests;
 
 #[cfg(test)]

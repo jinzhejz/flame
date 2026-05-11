@@ -5,21 +5,21 @@ import numpy as np
 import pyarrow as pa
 
 from flamepy.core.cache import (
+    _MAGIC_PREFIX_LEN,
+    _TYPE_ARROW_ARRAY,
+    _TYPE_ARROW_BATCH,
+    _TYPE_ARROW_TABLE,
+    _TYPE_CLOUDPICKLE,
+    _TYPE_NUMPY,
     Object,
     ObjectKey,
     ObjectRef,
     _cache_lock,
     _deserialize_object,
     _deserialize_object_data,
-    _MAGIC_PREFIX_LEN,
     _object_cache,
     _serialize_object,
     _serialize_object_data,
-    _TYPE_ARROW_ARRAY,
-    _TYPE_ARROW_BATCH,
-    _TYPE_ARROW_TABLE,
-    _TYPE_CLOUDPICKLE,
-    _TYPE_NUMPY,
     delete_objects,
 )
 

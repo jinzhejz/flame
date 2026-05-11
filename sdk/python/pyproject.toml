@@ -24,8 +24,8 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-  "grpcio>=1.78",
-  "grpcio-tools>=1.78",
+  "grpcio>=1.80",
+  "grpcio-tools>=1.80",
   "protobuf>=6.31.0",
   "pydantic>=2.11.0",
   "fastapi>=0.115.0",
@@ -109,4 +109,3 @@ ignore_missing_imports = true
 dev = [
     "ruff>=0.1.0",
 ]
-

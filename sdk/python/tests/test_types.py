@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timezone
 
+import flamepy
+from flamepy import core as flamepy_core
 from flamepy.core.types import (
     Application,
     ApplicationAttributes,
@@ -56,6 +58,12 @@ def test_resource_requirement_defaults():
     assert rr.cpu == 0
     assert rr.memory == 0
     assert rr.gpu == 0
+
+
+def test_resource_requirement_public_exports():
+    """ResourceRequirement should be available from documented SDK entrypoints."""
+    assert flamepy.ResourceRequirement is ResourceRequirement
+    assert flamepy_core.ResourceRequirement is ResourceRequirement
 
 
 def test_resource_requirement_explicit_values():

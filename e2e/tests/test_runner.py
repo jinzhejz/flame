@@ -34,7 +34,7 @@ def check_package_config():
     """Check that storage configuration is available (via package.storage or cache.endpoint)."""
     ctx = flamepy.FlameContext()
     # Storage can come from either package.storage or cache.endpoint
-    has_package_storage = ctx.package is not None and getattr(ctx.package, 'storage', None) is not None
+    has_package_storage = ctx.package is not None and getattr(ctx.package, "storage", None) is not None
     has_cache_endpoint = ctx.cache is not None
     if not has_package_storage and not has_cache_endpoint:
         pytest.skip("Storage configuration not set in flame.yaml. Please add 'cache.endpoint' or 'package.storage' section.")
@@ -85,16 +85,15 @@ def test_runner_with_function(check_package_config, check_flmrun_app):
 def test_runner_with_class(check_package_config, check_flmrun_app):
     """Test Case 3: Test Runner with a class (auto-instantiation)."""
     with runner.Runner("test-runner-class") as rr:
-        # Create a service with a class (should auto-instantiate)
-        cnt_s = rr.service(Counter)
+        # Create a service with a class (should auto-instantiate).
+        calc_s = rr.service(Calculator)
 
-        # Call methods - use wait() to ensure completion without fetching results
-        rr.wait([cnt_s.increment(), cnt_s.add(3)])
-        res_r = cnt_s.get_count()
+        # Class services are not stateful, so use a stateless method here.
+        res_r = calc_s.multiply(2, 3)
 
         # Get the result
         value = res_r.get()
-        assert value == 4, f"Expected 4, got {value}"
+        assert value == 6, f"Expected 6, got {value}"
 
 
 def test_runner_with_instance(check_package_config, check_flmrun_app):
@@ -105,11 +104,12 @@ def test_runner_with_instance(check_package_config, check_flmrun_app):
         # Set initial count to 10 by adding 10
         counter.add(10)
 
-        # Create a service with the instance
-        cnt_os = rr.service(counter)
+        # Create a stateful service with the instance
+        cnt_os = rr.service(counter, stateful=True, autoscale=False)
 
-        # Call methods - use wait() to ensure completion without fetching results
-        rr.wait([cnt_os.increment(), cnt_os.add(3)])
+        # Apply state changes sequentially so the expected total is deterministic.
+        cnt_os.increment().wait()
+        cnt_os.add(3).wait()
         res_r = cnt_os.get_count()
 
         # Get the result
@@ -124,11 +124,13 @@ def test_runner_with_objectfuture_args(check_package_config, check_flmrun_app):
         counter = Counter()
         counter.add(10)
 
-        # Create a service with the instance
-        cnt_os = rr.service(counter)
+        # Create a stateful service with the instance
+        cnt_os = rr.service(counter, stateful=True, autoscale=False)
 
-        # Call methods - use wait() to ensure completion without fetching results
-        rr.wait([cnt_os.increment(), cnt_os.add(3)])
+        # Apply state changes sequentially so ObjectFuture chaining starts from
+        # a deterministic counter value.
+        cnt_os.increment().wait()
+        cnt_os.add(3).wait()
         res_r = cnt_os.get_count()
 
         # Use ObjectFuture as argument
@@ -269,7 +271,7 @@ def test_flame_package_dataclass():
 def test_runner_error_no_storage_config():
     """Test Runner fails gracefully without storage config (no package.storage and no cache.endpoint)."""
     ctx = flamepy.FlameContext()
-    has_package_storage = ctx.package is not None and getattr(ctx.package, 'storage', None) is not None
+    has_package_storage = ctx.package is not None and getattr(ctx.package, "storage", None) is not None
     has_cache_endpoint = ctx.cache is not None
     if has_package_storage or has_cache_endpoint:
         pytest.skip("Storage config is available (package.storage or cache.endpoint), cannot test error case")
@@ -355,12 +357,10 @@ def test_runner_defaults_class(check_package_config, check_flmrun_app):
     """Test Case 19: Test default parameters for class (stateful=False, autoscale=False)."""
     with runner.Runner("test-runner-defaults-class") as rr:
         # Create service with class using defaults (should be stateful=False, autoscale=False)
-        counter_service = rr.service(Counter)
+        calc_service = rr.service(Calculator)
 
-        # Call methods
-        counter_service.add(10).wait()
-        counter_service.increment().wait()
-        result = counter_service.get_count()
+        # Use a stateless method because class services cannot be stateful.
+        result = calc_service.add(10, 1)
 
         value = result.get()
         assert value == 11, f"Expected 11, got {value}"
@@ -763,3 +763,701 @@ def test_runner_recursive_same_session(check_package_config, check_flmrun_app):
         value2 = result2.get()
         logger.info(f"[TEST] depth=2 result={value2} ({time.time() - start_time:.2f}s)")
         assert value2 == 4, f"Expected 4 for depth=2, got {value2}"
+
+
+# =============================================================================
+# Flmrun Application Tests (from test_flmrun.py)
+# =============================================================================
+
+
+FLMRUN_E2E_APP = "flmrun-e2e"
+
+
+@pytest.fixture
+def setup_flmrun_with_e2e():
+    """
+    Fixture to register a flmrun application with e2e modules available.
+
+    This registers a custom flmrun application with PYTHONPATH set to include
+    the e2e package, making e2e modules available to the runner.
+    """
+    import os
+
+    if not os.path.exists("/opt/e2e"):
+        pytest.skip("Requires /opt/e2e directory (Docker E2E environment only)")
+
+    flmrun = flamepy.get_application("flmrun")
+
+    flamepy.register_application(
+        FLMRUN_E2E_APP,
+        flamepy.ApplicationAttributes(
+            working_directory="/opt/e2e",
+            command=flmrun.command,
+            arguments=flmrun.arguments,
+            environments={"PYTHONPATH": "/opt/e2e/src"},
+            installer="python",
+            description="Flmrun with e2e modules available",
+        ),
+    )
+
+    yield
+
+    flamepy.unregister_application(FLMRUN_E2E_APP)
+
+
+@pytest.mark.skipif(not os.path.exists("/opt/e2e"), reason="Requires Docker E2E environment")
+class TestFlmrunApplication:
+    """Tests for flmrun application functionality."""
+
+    def test_flmrun_application_registered(self, setup_flmrun_with_e2e):
+        """Test that flmrun is registered as a default application."""
+        apps = flamepy.list_applications()
+        app_names = [app.name for app in apps]
+        assert FLMRUN_E2E_APP in app_names, f"{FLMRUN_E2E_APP} not found in applications: {app_names}"
+
+        flmrun = flamepy.get_application(FLMRUN_E2E_APP)
+        assert flmrun.name == FLMRUN_E2E_APP
+        assert flmrun.state == flamepy.ApplicationState.ENABLED
+        assert flmrun.command == "python3"
+
+    def test_flmrun_sum_function(self, setup_flmrun_with_e2e):
+        """Test Case 1: Run a simple sum function remotely."""
+        from e2e.helpers import serialize_runner_context, serialize_runner_request
+
+        ctx = runner.RunnerContext(execution_object=sum_func)
+        common_data_bytes = serialize_runner_context(ctx, FLMRUN_E2E_APP)
+        ssn = flamepy.create_session(FLMRUN_E2E_APP, common_data_bytes)
+
+        try:
+            req = runner.RunnerRequest(method=None, args=(1, 2))
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+
+            result_ref = flamepy.core.ObjectRef.decode(result_bytes)
+            result = flamepy.core.get_object(result_ref)
+
+            assert result == 3, f"Expected 3, got {result}"
+        finally:
+            ssn.close()
+
+    def test_flmrun_class_method(self, setup_flmrun_with_e2e):
+        """Test Case 2: Run methods on a class instance."""
+        from e2e.helpers import serialize_runner_context, serialize_runner_request
+
+        calc = Calculator()
+
+        ctx = runner.RunnerContext(execution_object=calc)
+        common_data_bytes = serialize_runner_context(ctx, FLMRUN_E2E_APP)
+        ssn = flamepy.create_session(FLMRUN_E2E_APP, common_data_bytes)
+
+        try:
+            req = runner.RunnerRequest(method="add", args=(5, 3))
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == 8, f"Expected 8, got {result}"
+
+            req = runner.RunnerRequest(method="multiply", args=(4, 7))
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == 28, f"Expected 28, got {result}"
+
+            req = runner.RunnerRequest(method="subtract", args=(10, 3))
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == 7, f"Expected 7, got {result}"
+        finally:
+            ssn.close()
+
+    def test_flmrun_kwargs(self, setup_flmrun_with_e2e):
+        """Test Case 3: Run a function with keyword arguments."""
+        from e2e.helpers import serialize_runner_context, serialize_runner_request
+
+        ctx = runner.RunnerContext(execution_object=greet_func)
+        common_data_bytes = serialize_runner_context(ctx, FLMRUN_E2E_APP)
+        ssn = flamepy.create_session(FLMRUN_E2E_APP, common_data_bytes)
+
+        try:
+            req = runner.RunnerRequest(method=None, kwargs={"name": "World", "greeting": "Hi"})
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == "Hi, World!", f"Expected 'Hi, World!', got {result}"
+
+            req = runner.RunnerRequest(method=None, kwargs={"name": "Python"})
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == "Hello, Python!", f"Expected 'Hello, Python!', got {result}"
+        finally:
+            ssn.close()
+
+    def test_flmrun_stateful_class(self, setup_flmrun_with_e2e):
+        """Test Case 6: Run a stateful class with instance variables."""
+        from e2e.helpers import serialize_runner_context, serialize_runner_request
+
+        counter = Counter()
+
+        ctx = runner.RunnerContext(execution_object=counter)
+        common_data_bytes = serialize_runner_context(ctx, FLMRUN_E2E_APP)
+        ssn = flamepy.create_session(FLMRUN_E2E_APP, common_data_bytes)
+
+        try:
+            req = runner.RunnerRequest(method="increment")
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == 1, f"Expected 1, got {result}"
+
+            req = runner.RunnerRequest(method="increment")
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == 2, f"Expected 2, got {result}"
+
+            req = runner.RunnerRequest(method="add", args=(5,))
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == 7, f"Expected 7, got {result}"
+
+            req = runner.RunnerRequest(method="get_count")
+            req_bytes = serialize_runner_request(req)
+            result_bytes = ssn.invoke(req_bytes)
+            result = flamepy.core.get_object(flamepy.core.ObjectRef.decode(result_bytes))
+            assert result == 7, f"Expected 7, got {result}"
+        finally:
+            ssn.close()
+
+
+# =============================================================================
+# get_data Helper Tests (from test_get_data.py)
+# =============================================================================
+
+
+class TestGetData:
+    """Tests for the `get_data` helper function in flamepy.runner."""
+
+    def test_get_data_task_input_positional_args(self, check_package_config, check_flmrun_app):
+        """TC-GD-001: Test get_data retrieves task input with positional arguments."""
+        from flamepy.core import get_session
+        from flamepy.runner import get_data
+
+        with runner.Runner("test-get-data-input-pos") as rr:
+            sum_service = rr.service(sum_func)
+
+            result = sum_service(5, 3)
+            value = result.get()
+            assert value == 8, f"Expected 8, got {value}"
+
+            session = get_session(sum_service._session.id)
+            tasks = list(session.list_tasks())
+            assert len(tasks) >= 1, "Expected at least one task"
+
+            task = tasks[0]
+            assert task.input is not None, "Task input should not be None"
+
+            input_data = get_data(task.input)
+
+            assert input_data["type"] == "input", f"Expected type 'input', got {input_data['type']}"
+            assert input_data["method"] is None, f"Expected method None for function, got {input_data['method']}"
+            assert input_data["args"] == (5, 3), f"Expected args (5, 3), got {input_data['args']}"
+
+    def test_get_data_task_output(self, check_package_config, check_flmrun_app):
+        """TC-GD-002: Test get_data retrieves task output correctly."""
+        from flamepy.core import get_session
+        from flamepy.runner import get_data
+
+        from e2e.helpers import multiply_func
+
+        with runner.Runner("test-get-data-output") as rr:
+            multiply_service = rr.service(multiply_func)
+
+            result = multiply_service(4, 7)
+            value = result.get()
+            assert value == 28, f"Expected 28, got {value}"
+
+            session = get_session(multiply_service._session.id)
+            tasks = list(session.list_tasks())
+            assert len(tasks) >= 1, "Expected at least one task"
+
+            task = tasks[0]
+            assert task.output is not None, "Task output should not be None"
+
+            output_data = get_data(task.output)
+
+            assert output_data["type"] == "output", f"Expected type 'output', got {output_data['type']}"
+            assert output_data["result"] == 28, f"Expected result 28, got {output_data['result']}"
+
+    def test_get_data_invalid_data_format(self, check_package_config, check_flmrun_app):
+        """TC-GD-007: Test get_data handles invalid data format gracefully."""
+        from flamepy.runner import ErrorType, RunnerError, get_data
+
+        invalid_data = b"this is not valid objectref data"
+
+        with pytest.raises(RunnerError) as exc_info:
+            get_data(invalid_data)
+
+        assert exc_info.value.error_type == ErrorType.DECODE_ERROR
+        assert "decode" in str(exc_info.value).lower() or "failed" in str(exc_info.value).lower()
+
+    def test_get_data_empty_bytes(self, check_package_config, check_flmrun_app):
+        """TC-GD-008: Test get_data handles empty bytes gracefully."""
+        from flamepy.runner import ErrorType, RunnerError, get_data
+
+        empty_data = b""
+
+        with pytest.raises(RunnerError) as exc_info:
+            get_data(empty_data)
+
+        assert exc_info.value.error_type == ErrorType.DECODE_ERROR
+
+    def test_get_data_class_method_input(self, check_package_config, check_flmrun_app):
+        """TC-GD-006: Test get_data retrieves class method invocation input."""
+        from flamepy.core import get_session
+        from flamepy.runner import get_data
+
+        with runner.Runner("test-get-data-method") as rr:
+            calc_service = rr.service(Calculator())
+
+            result = calc_service.add(15, 25)
+            value = result.get()
+            assert value == 40, f"Expected 40, got {value}"
+
+            session = get_session(calc_service._session.id)
+            tasks = list(session.list_tasks())
+            assert len(tasks) >= 1, "Expected at least one task"
+
+            task = tasks[0]
+            assert task.input is not None, "Task input should not be None"
+
+            input_data = get_data(task.input)
+
+            assert input_data["type"] == "input"
+            assert input_data["method"] == "add", f"Expected method 'add', got {input_data['method']}"
+            assert input_data["args"] == (15, 25), f"Expected args (15, 25), got {input_data['args']}"
+
+
+# =============================================================================
+# Distributed Running Functions Tests (from test_drf.py)
+# =============================================================================
+
+
+class TestParallelExecution:
+    """Tests for parallel task execution patterns."""
+
+    def test_parallel_tasks_basic(self, check_package_config, check_flmrun_app):
+        """Test basic parallel task execution with multiple tasks submitted at once."""
+        with runner.Runner("test-drf-parallel-basic") as rr:
+            sum_service = rr.service(sum_func)
+
+            results = [
+                sum_service(1, 1),
+                sum_service(2, 2),
+                sum_service(3, 3),
+                sum_service(4, 4),
+                sum_service(5, 5),
+            ]
+
+            values = rr.get(results)
+            assert values == [2, 4, 6, 8, 10], f"Expected [2, 4, 6, 8, 10], got {values}"
+
+    def test_parallel_tasks_high_concurrency(self, check_package_config, check_flmrun_app):
+        """Test high concurrency with many parallel tasks."""
+        with runner.Runner("test-drf-parallel-high") as rr:
+            sum_service = rr.service(sum_func)
+
+            num_tasks = 50
+            results = [sum_service(i, i) for i in range(num_tasks)]
+            values = rr.get(results)
+
+            expected = [i * 2 for i in range(num_tasks)]
+            assert values == expected, "High concurrency test failed"
+
+    def test_parallel_tasks_different_services(self, check_package_config, check_flmrun_app):
+        """Test parallel execution across different services."""
+        with runner.Runner("test-drf-parallel-multi-svc") as rr:
+            sum_service = rr.service(sum_func)
+            calc_service = rr.service(Calculator())
+
+            results = [
+                sum_service(10, 5),
+                calc_service.multiply(3, 4),
+                sum_service(20, 10),
+                calc_service.subtract(15, 5),
+            ]
+
+            values = rr.get(results)
+            assert values == [15, 12, 30, 10], f"Expected [15, 12, 30, 10], got {values}"
+
+    def test_parallel_select_iterator(self, check_package_config, check_flmrun_app):
+        """Test using select() iterator for parallel task results."""
+        with runner.Runner("test-drf-parallel-select") as rr:
+            sum_service = rr.service(sum_func)
+
+            results = [
+                sum_service(1, 2),
+                sum_service(3, 4),
+                sum_service(5, 6),
+            ]
+
+            completed_values = []
+            for result in rr.select(results):
+                completed_values.append(result.get())
+
+            assert sorted(completed_values) == [3, 7, 11]
+
+
+class TestTaskChaining:
+    """Tests for task chaining and dependency patterns."""
+
+    def test_task_chaining_sequential(self, check_package_config, check_flmrun_app):
+        """Test sequential task chaining where output of one task feeds into next."""
+        with runner.Runner("test-drf-chain-seq") as rr:
+            counter = Counter()
+            cnt_service = rr.service(counter, stateful=True, autoscale=False)
+
+            cnt_service.add(10).wait()
+            cnt_service.add(5).wait()
+            cnt_service.increment().wait()
+            result = cnt_service.get_count()
+
+            value = result.get()
+            assert value == 16, f"Expected 16, got {value}"
+
+    def test_task_chaining_with_objectfuture(self, check_package_config, check_flmrun_app):
+        """Test chaining using ObjectFuture as argument to next task."""
+        with runner.Runner("test-drf-chain-objfuture") as rr:
+            counter = Counter()
+            cnt_service = rr.service(counter, stateful=True, autoscale=False)
+
+            cnt_service.add(10).wait()
+            intermediate = cnt_service.get_count()
+
+            cnt_service.add(intermediate).wait()
+            final = cnt_service.get_count()
+
+            value = final.get()
+            assert value == 20, f"Expected 20, got {value}"
+
+    def test_task_dependency_graph(self, check_package_config, check_flmrun_app):
+        """Test dependency graph: a(1,2)=3, b(3,4)=7, c(a,b)=10."""
+        with runner.Runner("test-drf-chain-graph") as rr:
+            sum_service = rr.service(sum_func)
+
+            a = sum_service(1, 2)
+            b = sum_service(3, 4)
+
+            val_a, val_b = rr.get([a, b])
+            assert val_a == 3
+            assert val_b == 7
+
+            c = sum_service(val_a, val_b)
+            val_c = c.get()
+            assert val_c == 10, f"Expected 10, got {val_c}"
+
+
+class TestMapReducePattern:
+    """Tests for map-reduce distributed computing patterns."""
+
+    def test_map_phase(self, check_package_config, check_flmrun_app):
+        """Test map phase - apply same operation to multiple inputs."""
+        with runner.Runner("test-drf-map") as rr:
+            calc_service = rr.service(Calculator())
+
+            inputs = [2, 3, 4, 5, 6]
+            mapped_results = [calc_service.multiply(x, x) for x in inputs]
+
+            values = rr.get(mapped_results)
+            assert values == [4, 9, 16, 25, 36], f"Map phase failed: {values}"
+
+    def test_reduce_phase(self, check_package_config, check_flmrun_app):
+        """Test reduce phase - aggregate multiple values pairwise."""
+        with runner.Runner("test-drf-reduce") as rr:
+            sum_service = rr.service(sum_func)
+
+            values = [10, 20, 30, 40]
+
+            level1 = [
+                sum_service(values[0], values[1]),
+                sum_service(values[2], values[3]),
+            ]
+            level1_values = rr.get(level1)
+            assert level1_values == [30, 70]
+
+            result = sum_service(level1_values[0], level1_values[1])
+            final = result.get()
+            assert final == 100, f"Reduce phase failed: {final}"
+
+    def test_full_map_reduce(self, check_package_config, check_flmrun_app):
+        """Test map-reduce: square numbers [1,2,3,4] then sum = 1+4+9+16 = 30."""
+        with runner.Runner("test-drf-mapreduce") as rr:
+            calc_service = rr.service(Calculator())
+            sum_service = rr.service(sum_func)
+
+            inputs = [1, 2, 3, 4]
+
+            mapped = [calc_service.multiply(x, x) for x in inputs]
+            squared = rr.get(mapped)
+            assert squared == [1, 4, 9, 16], f"Map failed: {squared}"
+
+            level1 = [
+                sum_service(squared[0], squared[1]),
+                sum_service(squared[2], squared[3]),
+            ]
+            level1_values = rr.get(level1)
+
+            final = sum_service(level1_values[0], level1_values[1])
+            result = final.get()
+            assert result == 30, f"MapReduce result should be 30, got {result}"
+
+
+class TestDRFErrorHandling:
+    """Tests for error handling in distributed execution."""
+
+    def test_error_in_single_task(self, check_package_config, check_flmrun_app):
+        """Test that errors in a single task are properly propagated."""
+
+        def failing_func(x: int) -> int:
+            if x < 0:
+                raise ValueError(f"Negative value not allowed: {x}")
+            return x * 2
+
+        with runner.Runner("test-drf-error-single") as rr:
+            service = rr.service(failing_func)
+
+            result = service(5)
+            assert result.get() == 10
+
+            error_result = service(-1)
+            with pytest.raises(Exception):
+                error_result.get()
+
+    def test_partial_failure_in_parallel(self, check_package_config, check_flmrun_app):
+        """Test handling when some tasks fail in parallel execution."""
+
+        def conditional_fail(x: int) -> int:
+            if x == 3:
+                raise ValueError("Task 3 always fails")
+            return x * 10
+
+        with runner.Runner("test-drf-error-partial") as rr:
+            service = rr.service(conditional_fail)
+
+            results = [
+                service(1),
+                service(2),
+                service(3),
+                service(4),
+            ]
+
+            successful_values = []
+            failed_count = 0
+            for result in results:
+                try:
+                    successful_values.append(result.get())
+                except Exception:
+                    failed_count += 1
+
+            assert len(successful_values) == 3
+            assert sorted(successful_values) == [10, 20, 40]
+            assert failed_count == 1
+
+
+class TestDRFStatefulServices:
+    """Tests for stateful service behavior in DRF."""
+
+    def test_stateful_counter_operations(self, check_package_config, check_flmrun_app):
+        """Test stateful counter with multiple operations."""
+        with runner.Runner("test-drf-stateful-counter") as rr:
+            counter = Counter()
+            cnt_service = rr.service(counter, stateful=True, autoscale=False)
+
+            cnt_service.add(100).wait()
+            cnt_service.increment().wait()
+            cnt_service.increment().wait()
+            cnt_service.add(50).wait()
+
+            result = cnt_service.get_count()
+            value = result.get()
+            assert value == 152, f"Expected 152, got {value}"
+
+    def test_stateful_isolation_between_services(self, check_package_config, check_flmrun_app):
+        """Test that different stateful services maintain separate state."""
+        with runner.Runner("test-drf-stateful-isolation") as rr:
+            counter1 = Counter()
+            counter2 = Counter()
+
+            svc1 = rr.service(counter1, stateful=True, autoscale=False)
+            svc2 = rr.service(counter2, stateful=True, autoscale=False)
+
+            svc1.add(10).wait()
+            svc1.increment().wait()
+
+            svc2.add(100).wait()
+
+            val1 = svc1.get_count().get()
+            val2 = svc2.get_count().get()
+
+            assert val1 == 11, f"Counter1 expected 11, got {val1}"
+            assert val2 == 100, f"Counter2 expected 100, got {val2}"
+
+
+class TestDRFSessionManagement:
+    """Tests for session lifecycle and management in DRF."""
+
+    def test_session_cleanup_on_exit(self, check_package_config, check_flmrun_app):
+        """Test that session is properly cleaned up when Runner exits."""
+        app_name = "test-drf-session-cleanup"
+
+        with runner.Runner(app_name) as rr:
+            sum_service = rr.service(sum_func)
+            result = sum_service(1, 2)
+            assert result.get() == 3
+
+            session_id = sum_service._session.id
+
+        sessions = flamepy.list_sessions()
+        session = next((s for s in sessions if s.id == session_id), None)
+        if session:
+            assert session.state == flamepy.SessionState.CLOSED
+
+    def test_multiple_runners_same_app(self, check_package_config, check_flmrun_app):
+        """Test running multiple Runners with the same application name."""
+        app_name = "test-drf-multi-runner"
+
+        with runner.Runner(app_name) as rr1:
+            svc1 = rr1.service(sum_func)
+            r1 = svc1(10, 20)
+            val1 = r1.get()
+            assert val1 == 30
+
+            with runner.Runner(app_name) as rr2:
+                svc2 = rr2.service(sum_func)
+                r2 = svc2(100, 200)
+                val2 = r2.get()
+                assert val2 == 300
+
+
+class TestDRFPerformance:
+    """Tests for performance characteristics in DRF."""
+
+    def test_throughput_many_small_tasks(self, check_package_config, check_flmrun_app):
+        """Test throughput with many small tasks."""
+        import time as time_module
+
+        with runner.Runner("test-drf-throughput") as rr:
+            sum_service = rr.service(sum_func)
+
+            start_time = time_module.time()
+
+            num_tasks = 100
+            results = [sum_service(i, 1) for i in range(num_tasks)]
+            values = rr.get(results)
+
+            elapsed = time_module.time() - start_time
+
+            expected = [i + 1 for i in range(num_tasks)]
+            assert values == expected
+
+            throughput = num_tasks / elapsed if elapsed > 0 else 0
+            print(f"Throughput: {throughput:.2f} tasks/sec for {num_tasks} tasks in {elapsed:.2f}s")
+
+
+class TestDRFEdgeCases:
+    """Tests for edge cases and boundary conditions in DRF."""
+
+    def test_empty_arguments(self, check_package_config, check_flmrun_app):
+        """Test calling function with no arguments."""
+
+        def get_constant() -> int:
+            return 42
+
+        with runner.Runner("test-drf-empty-args") as rr:
+            service = rr.service(get_constant)
+            result = service()
+            value = result.get()
+            assert value == 42
+
+    def test_none_arguments(self, check_package_config, check_flmrun_app):
+        """Test handling None as argument."""
+
+        def handle_none(x) -> str:
+            return "none" if x is None else "not-none"
+
+        with runner.Runner("test-drf-none-args") as rr:
+            service = rr.service(handle_none)
+            result = service(None)
+            value = result.get()
+            assert value == "none"
+
+    def test_large_return_value(self, check_package_config, check_flmrun_app):
+        """Test handling large return values."""
+
+        def create_large_list(n: int) -> list:
+            return list(range(n))
+
+        with runner.Runner("test-drf-large-return") as rr:
+            service = rr.service(create_large_list)
+            result = service(10000)
+            value = result.get()
+            assert len(value) == 10000
+            assert value[0] == 0
+            assert value[9999] == 9999
+
+    def test_nested_data_structures(self, check_package_config, check_flmrun_app):
+        """Test handling nested data structures."""
+
+        def process_nested(data: dict) -> dict:
+            return {
+                "input": data,
+                "processed": True,
+                "nested": {"level": 2, "data": [1, 2, 3]},
+            }
+
+        with runner.Runner("test-drf-nested-data") as rr:
+            service = rr.service(process_nested)
+            input_data = {"key": "value", "list": [1, 2, 3]}
+            result = service(input_data)
+            value = result.get()
+
+            assert value["processed"] is True
+            assert value["input"] == input_data
+            assert value["nested"]["level"] == 2
+
+
+class TestDRFConcurrentAccess:
+    """Tests for concurrent access patterns in DRF."""
+
+    def test_concurrent_service_calls(self, check_package_config, check_flmrun_app):
+        """Test concurrent calls to the same service."""
+        with runner.Runner("test-drf-concurrent-calls") as rr:
+            sum_service = rr.service(sum_func)
+
+            num_calls = 30
+            results = [sum_service(i, i + 1) for i in range(num_calls)]
+
+            values = rr.get(results)
+            expected = [i + (i + 1) for i in range(num_calls)]
+            assert values == expected
+
+    def test_interleaved_operations(self, check_package_config, check_flmrun_app):
+        """Test interleaved operations on multiple services."""
+        with runner.Runner("test-drf-interleaved") as rr:
+            sum_service = rr.service(sum_func)
+            calc_service = rr.service(Calculator())
+
+            results = []
+            for i in range(10):
+                results.append(sum_service(i, 1))
+                results.append(calc_service.multiply(i, 2))
+
+            values = rr.get(results)
+
+            for i in range(10):
+                sum_idx = i * 2
+                mult_idx = i * 2 + 1
+                assert values[sum_idx] == i + 1, f"Sum at {sum_idx} wrong"
+                assert values[mult_idx] == i * 2, f"Multiply at {mult_idx} wrong"
