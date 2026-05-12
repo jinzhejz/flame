@@ -32,7 +32,7 @@ sudo cp target/release/flmadm /usr/local/bin/
 Or use an existing installation:
 
 ```bash
-sudo flmadm install
+sudo flmadm install --all
 ```
 
 ## Usage
@@ -61,17 +61,17 @@ sudo flmadm install --all --enable
 
 **User-local installation (no systemd):**
 ```bash
-flmadm install --no-systemd --prefix ~/flame
+flmadm install --all --no-systemd --prefix ~/flame
 ```
 
 **Clean install (backup and reinstall):**
 ```bash
-sudo flmadm install --clean --enable
+sudo flmadm install --all --clean --enable
 ```
 
 **Verbose build output:**
 ```bash
-sudo flmadm install --verbose
+sudo flmadm install --all --verbose
 ```
 
 **Install specific profiles:**
@@ -281,7 +281,7 @@ tail -f /usr/local/flame/logs/fsm.log
 - **Rust toolchain**: Required for building from source (unless `--skip-build`)
   - Install: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - **Git**: Required for cloning from GitHub (unless `--src-dir` provided)
-- **pip/pip3**: Required for installing Python SDK
+- **uv**: Required for installing the Python SDK
 - **systemd**: Required for service management (unless `--no-systemd`)
 - **Root privileges**: Required for system-wide installation with systemd
 
@@ -292,20 +292,20 @@ tail -f /usr/local/flame/logs/fsm.log
 ```bash
 # Developer working on Flame source
 cd ~/projects/flame
-flmadm install --src-dir . --prefix ~/flame --no-systemd
+flmadm install --all --src-dir . --prefix ~/flame --no-systemd
 
 # Make changes, rebuild
 cargo build --release
 
 # Reinstall with updated binaries
-flmadm install --src-dir . --prefix ~/flame --skip-build --no-systemd --clean
+flmadm install --all --src-dir . --prefix ~/flame --skip-build --no-systemd --clean
 ```
 
 ### Production Deployment
 
 ```bash
 # Single-node deployment (all components)
-sudo flmadm install --enable
+sudo flmadm install --all --enable
 
 # Multi-node deployment: Control plane node
 sudo flmadm install --control-plane --enable
@@ -322,7 +322,7 @@ sudo systemctl status flame-session-manager flame-executor-manager
 
 # Upgrade to new version
 sudo systemctl stop flame-executor-manager flame-session-manager
-sudo flmadm install --clean
+sudo flmadm install --all --clean
 sudo systemctl start flame-session-manager flame-executor-manager
 ```
 
@@ -346,7 +346,7 @@ sudo flmadm install --worker --force --skip-build
 
 ```bash
 # Install for testing
-sudo flmadm install --prefix /tmp/flame-test --no-systemd
+sudo flmadm install --all --prefix /tmp/flame-test --no-systemd
 
 # Test the installation
 /tmp/flame-test/bin/flmctl --version
@@ -362,7 +362,7 @@ flmadm uninstall --prefix /tmp/flame-test --no-backup --force
 If the build fails, use `--verbose` to see full cargo output:
 
 ```bash
-sudo flmadm install --verbose
+sudo flmadm install --all --verbose
 ```
 
 Build logs are also saved to `/tmp/flame-install-build.log` for offline debugging.
@@ -372,13 +372,13 @@ Build logs are also saved to `/tmp/flame-install-build.log` for offline debuggin
 For system-wide installation, run with `sudo`:
 
 ```bash
-sudo flmadm install
+sudo flmadm install --all
 ```
 
 For user-local installation, use `--no-systemd`:
 
 ```bash
-flmadm install --no-systemd --prefix ~/flame
+flmadm install --all --no-systemd --prefix ~/flame
 ```
 
 ### Service Start Failures

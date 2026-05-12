@@ -45,16 +45,17 @@ init: ## Install required tools
 
 # Installation targets using flmadm
 install: build-release ## Install Flame to system (requires sudo)
-	sudo ./target/release/flmadm install --src-dir . --skip-build --enable
+	sudo ./target/release/flmadm install --all --src-dir . --skip-build --enable
 
 install-dev: build-release ## Install Flame to dev location (no sudo required)
-	./target/release/flmadm install --src-dir . --skip-build --no-systemd --prefix $(INSTALL_PREFIX)
+	./target/release/flmadm install --all --src-dir . --skip-build --no-systemd --prefix $(INSTALL_PREFIX)
 	@echo ""
 	@echo "Flame installed to: $(INSTALL_PREFIX)"
 	@echo "Add to PATH: export PATH=$(INSTALL_PREFIX)/bin:\$$PATH"
 	@echo "Start services manually:"
-	@echo "  $(INSTALL_PREFIX)/bin/flame-session-manager --config $(INSTALL_PREFIX)/conf/flame-cluster.yaml &"
-	@echo "  $(INSTALL_PREFIX)/bin/flame-executor-manager --config $(INSTALL_PREFIX)/conf/flame-cluster.yaml &"
+	@echo "  FLAME_HOME=$(INSTALL_PREFIX) $(INSTALL_PREFIX)/bin/flame-object-cache --config $(INSTALL_PREFIX)/conf/flame-cluster.yaml &"
+	@echo "  FLAME_HOME=$(INSTALL_PREFIX) $(INSTALL_PREFIX)/bin/flame-session-manager --config $(INSTALL_PREFIX)/conf/flame-cluster.yaml &"
+	@echo "  FLAME_HOME=$(INSTALL_PREFIX) $(INSTALL_PREFIX)/bin/flame-executor-manager --config $(INSTALL_PREFIX)/conf/flame-cluster.yaml &"
 
 uninstall: ## Uninstall Flame from system (requires sudo)
 	sudo ./target/release/flmadm uninstall --force
@@ -185,4 +186,3 @@ docker-logs: ## Show logs for running flame containers
 docker-release-legacy: init ## Legacy release target (original implementation)
 	$(CONTAINER_RUNTIME) build -t $(FSM_IMAGE):$(FSM_TAG) -f $(FSM_DOCKERFILE) .
 	$(CONTAINER_RUNTIME) build -t $(FEM_IMAGE):$(FEM_TAG) -f $(FEM_DOCKERFILE) .
-

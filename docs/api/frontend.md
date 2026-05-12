@@ -112,9 +112,11 @@ Creates a new session for task execution.
 
 **Example:**
 ```python
+import flamepy
+
 session = flamepy.create_session(
     application="my-app",
-    resreq={"cpu": 1, "mem": "1g"},  # optional; falls back to cluster.resreq
+    resreq=flamepy.ResourceRequirement.from_string("cpu=1,mem=1g"),
     min_instances=2,
     max_instances=10,
     batch_size=1

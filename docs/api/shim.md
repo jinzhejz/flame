@@ -76,20 +76,23 @@ Called when an executor binds to a session. Use this to initialize application-s
 | `command` | string | Command to execute (optional) |
 | `working_directory` | string | Working directory (optional) |
 | `url` | string | Service URL (optional) |
+| `installer` | string | Installer name (optional) |
 
 **Response:** [Result](types.md#result)
 
 **Example Implementation (Python):**
 ```python
-from flamepy import FlameService
+import json
 
-class MyService(FlameService):
+import flamepy
+
+class MyService(flamepy.FlameService):
     def on_session_enter(self, context):
         self.session_id = context.session_id
         self.db = Database.connect()  # Initialize resources
-        if context.common_data:
-            self.config = json.loads(context.common_data)
-        return 0  # Success
+        common_data = context.common_data()
+        if common_data:
+            self.config = json.loads(common_data)
 ```
 
 ### OnTaskInvoke
@@ -115,18 +118,9 @@ Called for each task that needs to be executed.
 **Example Implementation (Python):**
 ```python
 def on_task_invoke(self, context):
-    try:
-        input_data = json.loads(context.input)
-        result = self.process(input_data)
-        return TaskResult(
-            return_code=0,
-            output=json.dumps(result).encode()
-        )
-    except Exception as e:
-        return TaskResult(
-            return_code=1,
-            message=str(e)
-        )
+    input_data = json.loads(context.input)
+    result = self.process(input_data)
+    return json.dumps(result).encode()
 ```
 
 ### OnSessionLeave
@@ -141,7 +135,6 @@ Called when the executor unbinds from the session. Use this to clean up resource
 ```python
 def on_session_leave(self):
     self.db.close()  # Clean up resources
-    return 0  # Success
 ```
 
 ## Implementing a Shim
@@ -151,25 +144,23 @@ def on_session_leave(self):
 For native applications running on the host:
 
 ```python
-from flamepy import FlameService, FlameInstanceServer
+import flamepy
 
-class MyApplication(FlameService):
+class MyApplication(flamepy.FlameService):
     def on_session_enter(self, context):
         # Initialize
-        return 0
+        pass
     
     def on_task_invoke(self, context):
         # Process task
-        result = do_work(context.input)
-        return TaskResult(return_code=0, output=result)
+        return do_work(context.input)
     
     def on_session_leave(self):
         # Cleanup
-        return 0
+        pass
 
 if __name__ == "__main__":
-    server = FlameInstanceServer(MyApplication())
-    server.start()
+    flamepy.run(MyApplication())
 ```
 
 ### Wasm Shim
