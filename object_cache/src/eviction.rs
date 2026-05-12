@@ -66,6 +66,12 @@ pub trait EvictionPolicy: Send + Sync {
     /// Called when an object is added to the cache.
     fn on_add(&self, key: &str, size: u64);
 
+    /// Called when an object's tracked memory footprint changes.
+    fn on_update(&self, key: &str, size: u64) {
+        self.on_remove(key);
+        self.on_add(key, size);
+    }
+
     /// Called when an object is removed (deleted, not evicted).
     fn on_remove(&self, key: &str);
 }
@@ -534,6 +540,22 @@ mod tests {
 
         assert_eq!(policy.current_count(), 1);
         assert_eq!(policy.current_memory(), 200);
+    }
+
+    #[test]
+    fn test_lru_policy_update_replaces_size() {
+        let config = EvictionConfig {
+            policy: Some("lru".to_string()),
+            max_memory: Some("100M".to_string()),
+            max_objects: None,
+        };
+        let policy = LRUPolicy::new(&config);
+
+        policy.on_add("key1", 100);
+        policy.on_update("key1", 250);
+
+        assert_eq!(policy.current_count(), 1);
+        assert_eq!(policy.current_memory(), 250);
     }
 
     #[test]
