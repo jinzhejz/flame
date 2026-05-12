@@ -243,6 +243,10 @@ impl Object {
             .iter()
             .fold(self.version, |current, delta| current.max(delta.version))
     }
+
+    pub fn size_bytes(&self) -> u64 {
+        self.data.len() as u64 + self.deltas.iter().map(Object::size_bytes).sum::<u64>()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -373,7 +377,7 @@ impl ObjectCache {
 
         for (key, object) in items {
             let key_str = key.to_key().expect("loaded key must have object_id");
-            let size = object.data.len() as u64;
+            let size = object.size_bytes();
             let version = object.current_version();
             let delta_count = object.deltas.len() as u64;
             let meta = self.create_metadata(key_str.clone(), version, size, delta_count);
@@ -443,7 +447,6 @@ impl ObjectCache {
         let key_str = key.to_key().ok_or_else(|| {
             FlameError::Internal("ObjectKey missing object_id in put".to_string())
         })?;
-        let size = object.data.len() as u64;
 
         // Acquire per-key lock to prevent concurrent version increments
         let key_lock = self.get_key_lock(&key_str)?;
@@ -466,6 +469,7 @@ impl ObjectCache {
         let new_version = current_version + 1;
 
         let versioned_object = Object::new(new_version, object.data);
+        let size = versioned_object.size_bytes();
 
         self.storage.write_object(&key, &versioned_object).await?;
 
@@ -503,7 +507,7 @@ impl ObjectCache {
         }
 
         if let Some(object) = self.storage.read_object(key).await? {
-            let size = object.data.len() as u64;
+            let size = object.size_bytes();
             let delta_count = object.deltas.len() as u64;
             let version = object.current_version();
 
@@ -543,6 +547,7 @@ impl ObjectCache {
             let objects = lock_ptr!(self.objects)?;
             objects.get(&key_str).cloned()
         };
+        let was_in_memory = current_object.is_some();
 
         let current_object = match current_object {
             Some(object) => object,
@@ -558,7 +563,7 @@ impl ObjectCache {
 
         let mut patched_object = current_object;
         patched_object.deltas.push(versioned_delta);
-        let size = patched_object.data.len() as u64;
+        let size = patched_object.size_bytes();
 
         meta.endpoint = self.endpoint.to_uri();
         meta.version = new_version;
@@ -573,6 +578,9 @@ impl ObjectCache {
             metadata.insert(key_str.clone(), meta.clone());
         }
 
+        if was_in_memory {
+            self.eviction_policy.on_remove(&key_str);
+        }
         self.eviction_policy.on_add(&key_str, size);
         self.run_eviction()?;
 
@@ -1623,6 +1631,21 @@ mod tests {
             ObjectCache::new(endpoint, storage, None).unwrap()
         }
 
+        async fn create_test_cache_with_max_memory(max_memory: &str) -> ObjectCache {
+            let endpoint = CacheEndpoint {
+                scheme: "grpc".to_string(),
+                host: "localhost".to_string(),
+                port: 9090,
+            };
+            let storage = crate::storage::connect("none").await.unwrap();
+            let eviction_config = EvictionConfig {
+                policy: Some("lru".to_string()),
+                max_memory: Some(max_memory.to_string()),
+                max_objects: None,
+            };
+            ObjectCache::new(endpoint, storage, Some(&eviction_config)).unwrap()
+        }
+
         #[tokio::test]
         async fn put_and_get_object() {
             let cache = create_test_cache().await;
@@ -1656,7 +1679,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(patch_meta.version, 2);
-            assert_eq!(patch_meta.size, 4);
+            assert_eq!(patch_meta.size, 9);
             assert_eq!(patch_meta.delta_count, 1);
 
             let object = cache.get(&key).await.unwrap();
@@ -1666,6 +1689,29 @@ mod tests {
             assert_eq!(object.deltas.len(), 1);
             assert_eq!(object.deltas[0].version, 2);
             assert_eq!(object.deltas[0].data, b"patch".to_vec());
+        }
+
+        #[tokio::test]
+        async fn patch_replaces_eviction_accounting_for_resident_object() {
+            let cache = create_test_cache_with_max_memory("10").await;
+
+            let key = ObjectKey::from_path("app/session").unwrap();
+            let meta = cache
+                .put(key, Object::new(0, b"base".to_vec()))
+                .await
+                .unwrap();
+            let key = ObjectKey::try_from(meta.key.as_str()).unwrap();
+
+            let patch_meta = cache
+                .patch(&key, Object::new(0, b"patch".to_vec()))
+                .await
+                .unwrap();
+
+            assert_eq!(patch_meta.size, 9);
+
+            let object = cache.get(&key).await.unwrap();
+            assert_eq!(object.size_bytes(), 9);
+            assert_eq!(object.deltas.len(), 1);
         }
 
         #[tokio::test]
