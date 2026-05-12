@@ -38,3 +38,4 @@ certs/
 
 # AI agent working directories
 .sisyphus/
+.claude/
