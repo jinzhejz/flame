@@ -547,7 +547,6 @@ impl ObjectCache {
             let objects = lock_ptr!(self.objects)?;
             objects.get(&key_str).cloned()
         };
-        let was_in_memory = current_object.is_some();
 
         let current_object = match current_object {
             Some(object) => object,
@@ -578,10 +577,7 @@ impl ObjectCache {
             metadata.insert(key_str.clone(), meta.clone());
         }
 
-        if was_in_memory {
-            self.eviction_policy.on_remove(&key_str);
-        }
-        self.eviction_policy.on_add(&key_str, size);
+        self.eviction_policy.on_update(&key_str, size);
         self.run_eviction()?;
 
         tracing::debug!(
