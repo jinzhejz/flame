@@ -8,9 +8,10 @@ if TYPE_CHECKING:
 class ReplayBuffer:
     """Replay-buffer service used by flamepy.runner.
 
-    The incremental deserializer keeps process-local materialized state. This
-    example relies on flamepy.runner invoking a service instance serially; add
-    synchronization before using the same instance from multiple threads.
+    The incremental deserializer keeps process-local materialized state per
+    service instance. Parallel requests may run on different fixed service
+    instances, so correctness comes from the shared ObjectRef and each instance
+    maintains its own best-effort materialized cache.
     """
 
     def __init__(self, rr: "Runner", force_full_get: bool = False):

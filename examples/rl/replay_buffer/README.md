@@ -9,17 +9,18 @@ with Runner("replay-buffer") as rr:
     # Create ReplayBuffer (creates ObjectRef internally via runner)
     buffer = ReplayBuffer(rr)
     
-    # Wrap as service for state/sample operations
-    buffer_svc = rr.service(buffer, autoscale=False)
+    # Wrap as a fixed multi-instance service for state/sample operations
+    buffer_svc = rr.service(buffer, warmup=sample_parallelism)
     collector = rr.service(Collector(env_name), autoscale=True)
 
     # Pass the SAME buffer object to collectors (pickled with its ObjectRef)
     collect_futures = [collector.collect(buffer, num_steps) for _ in range(num_collections)]
     rr.get(collect_futures)
 
-    # Query state and sample from service
+    # Query state and sample from the fixed-size buffer service
     stats = buffer_svc.state().get()
-    batch = buffer_svc.sample(batch_size).get()
+    sample_futures = [buffer_svc.sample(size) for size in sample_request_sizes]
+    batches = rr.get(sample_futures)
 ```
 
 ## Why This Pattern?
@@ -33,7 +34,8 @@ with Runner("replay-buffer") as rr:
 - When pickled as parameter, collectors get the same `ObjectRef`
 - `buffer.push()` calls `patch_object` - writes directly to cache
 - `get_object` returns only new patch batches after the buffer service has a local cache entry
-- The buffer service deserializer merges only newly seen patch batches into its local materialized buffer
+- The fixed-size buffer service can run sample requests on different instances
+- Each buffer service instance keeps its own materialized buffer and merges only newly seen patch batches for requests that land on that instance
 
 ## Usage
 
@@ -61,6 +63,7 @@ uv run main.py --local
 | `--collections` | Collections per iteration | 20 |
 | `--steps-per-collection` | Steps per collection task | 500 |
 | `--batch-size` | Sample batch size | 64 |
+| `--sample-parallelism` | Fixed replay-buffer service instances and distributed sample requests per iteration | 2 |
 | `--metrics-json` | Write distributed-mode metrics to a JSON file | Off |
 | `--merge-every` | Override replay-buffer patch merge cadence | Auto |
 | `--no-merge` | Disable patch merging, including forced-full runs | Off |
@@ -138,6 +141,8 @@ PY
 
 This default comparison intentionally keeps merge enabled for the forced-full baseline and disabled for incremental reads. Use `--merge-every` only when you want to override that policy.
 
+Use `--sample-parallelism N` when you want the learner to issue `N` replay-buffer sample requests in parallel. `ReplayBuffer` is passed as an instance, so `Runner.service()` defaults to a fixed-size service; `warmup=N` creates `N` service instances without adding in-instance threading.
+
 Example result from a 500,000-transition run after disabling merge for the incremental case:
 
 | Mode | Total Time | Throughput |
@@ -167,14 +172,15 @@ Configuration:
   Steps per collection: 500
   Iterations: 50
   Batch size: 64
+  Sample parallelism: 2
   Merge every: disabled
   Force full get: False
 
 Starting distributed collection...
 Iteration  0 | Buffer:  10000 | Total added:  10000 | Avg Reward:    21.4
-             | Sampled batch of 64 transitions
+             | Sampled 64 transitions across 2 request(s)
 Iteration  1 | Buffer:  20000 | Total added:  20000 | Avg Reward:    22.0
-             | Sampled batch of 64 transitions
+             | Sampled 64 transitions across 2 request(s)
 ...
 
 ============================================================
@@ -191,13 +197,13 @@ Collection Complete!
 ┌─────────────────────────────────────────────────────────────┐
 │                      Main (Learner)                         │
 │                                                             │
-│  buffer_svc.state()              buffer_svc.sample(batch)   │
+│  buffer_svc.state()              buffer_svc.sample(size) x N│
 │       │                                 │                   │
 └───────┼─────────────────────────────────┼───────────────────┘
         │                                 │
         ▼                                 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                  ReplayBuffer Service                       │
+│            Fixed-Size ReplayBuffer Service                  │
 │                                                             │
 │  Wraps ObjectRef - handles push/state/sample                │
 │                                                             │

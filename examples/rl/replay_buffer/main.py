@@ -11,6 +11,7 @@ from collector import Collector
 from replay_buffer import ReplayBuffer
 
 DEFAULT_FULL_GET_MERGE_EVERY = 5
+DEFAULT_SAMPLE_PARALLELISM = 2
 
 
 def _resolve_merge_every(
@@ -25,6 +26,20 @@ def _resolve_merge_every(
     return DEFAULT_FULL_GET_MERGE_EVERY if force_full_get else None
 
 
+def _sample_request_sizes(batch_size: int, sample_parallelism: int) -> list[int]:
+    if sample_parallelism < 1:
+        raise ValueError("sample_parallelism must be at least 1")
+    if batch_size <= 0:
+        return []
+
+    request_count = min(batch_size, sample_parallelism)
+    base_size, remainder = divmod(batch_size, request_count)
+    return [
+        base_size + (1 if request_index < remainder else 0)
+        for request_index in range(request_count)
+    ]
+
+
 def run_distributed(
     env_name: str = "CartPole-v1",
     num_iterations: int = 50,
@@ -34,11 +49,14 @@ def run_distributed(
     merge_every: int | None = None,
     metrics_json: str | None = None,
     force_full_get: bool = False,
+    sample_parallelism: int = DEFAULT_SAMPLE_PARALLELISM,
 ):
     import json
     import time
 
     from flamepy.runner import Runner
+
+    sample_request_sizes = _sample_request_sizes(batch_size, sample_parallelism)
 
     print("=" * 60)
     print("Distributed Replay Buffer (patch_object)")
@@ -49,6 +67,7 @@ def run_distributed(
     print(f"  Steps per collection: {steps_per_collection}")
     print(f"  Iterations: {num_iterations}")
     print(f"  Batch size: {batch_size}")
+    print(f"  Sample parallelism: {sample_parallelism}")
     print(f"  Merge every: {merge_every if merge_every else 'disabled'}")
     print(f"  Force full get: {force_full_get}")
     print("\nStarting distributed collection...")
@@ -59,7 +78,7 @@ def run_distributed(
 
     with Runner(f"replay-buffer-{env_name.lower()}") as rr:
         buffer = ReplayBuffer(rr, force_full_get=force_full_get)
-        buffer_svc = rr.service(buffer, autoscale=False, warmup=1)
+        buffer_svc = rr.service(buffer, warmup=sample_parallelism)
         collector = rr.service(Collector(env_name), autoscale=True)
 
         for iteration in range(num_iterations):
@@ -96,12 +115,21 @@ def run_distributed(
 
             sample_elapsed = 0.0
             sampled = 0
-            if total_size >= batch_size:
+            sample_requests = 0
+            if total_size >= batch_size and sample_request_sizes:
                 sample_start = time.time()
-                batch = buffer_svc.sample(batch_size).get()
+                sample_futures = [
+                    buffer_svc.sample(request_size)
+                    for request_size in sample_request_sizes
+                ]
+                batches = rr.get(sample_futures)
                 sample_elapsed = time.time() - sample_start
-                sampled = len(batch)
-                print(f"             | Sampled batch of {len(batch)} transitions")
+                sample_requests = len(batches)
+                sampled = sum(len(batch) for batch in batches)
+                print(
+                    f"             | Sampled {sampled} transitions "
+                    f"across {sample_requests} request(s)"
+                )
 
             metrics.append(
                 {
@@ -115,6 +143,7 @@ def run_distributed(
                     "total_episodes": total_episodes,
                     "avg_reward": avg_reward,
                     "sampled": sampled,
+                    "sample_requests": sample_requests,
                 }
             )
 
@@ -136,6 +165,7 @@ def run_distributed(
                         "collections": num_collections,
                         "steps_per_collection": steps_per_collection,
                         "batch_size": batch_size,
+                        "sample_parallelism": sample_parallelism,
                         "merge_every": merge_every,
                         "force_full_get": force_full_get,
                     },
@@ -263,6 +293,15 @@ def main():
         "--batch-size", type=int, default=64, help="Batch size for sampling"
     )
     parser.add_argument(
+        "--sample-parallelism",
+        type=int,
+        default=DEFAULT_SAMPLE_PARALLELISM,
+        help=(
+            "Fixed replay-buffer service instances and distributed sample "
+            f"requests per iteration (default: {DEFAULT_SAMPLE_PARALLELISM})"
+        ),
+    )
+    parser.add_argument(
         "--metrics-json",
         type=str,
         default=None,
@@ -312,6 +351,7 @@ def main():
             merge_every=merge_every,
             metrics_json=args.metrics_json,
             force_full_get=args.force_full_get,
+            sample_parallelism=args.sample_parallelism,
         )
 
 
