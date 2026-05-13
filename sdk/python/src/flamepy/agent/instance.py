@@ -78,11 +78,16 @@ class FlameInstance(FlameService):
         logger.debug(f"entrypoint: {func.__name__}")
 
         sig = inspect.signature(func)
-        self._entrypoint = func
         assert len(sig.parameters) == 1 or len(sig.parameters) == 0, "Entrypoint must have exactly zero or one parameter"
+
+        parameter = None
         for param in sig.parameters.values():
             assert param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD, "Parameter must be positional or keyword"
-            self._parameter = param
+            parameter = param
+
+        self._entrypoint = func
+        self._parameter = parameter
+        return func
 
     def on_session_enter(self, context: SessionContext):
         logger = logging.getLogger(__name__)
@@ -116,11 +121,9 @@ class FlameInstance(FlameService):
         logger.debug(f"on_task_invoke: {res}")
 
         # For agent module: serialize output with cloudpickle, return bytes
-        output_bytes = None
-        if res is not None:
-            output_bytes = cloudpickle.dumps(res, protocol=cloudpickle.DEFAULT_PROTOCOL)
-
-        return TaskOutput(output_bytes)
+        if res is None:
+            return None
+        return TaskOutput(cloudpickle.dumps(res, protocol=cloudpickle.DEFAULT_PROTOCOL))
 
     def on_session_leave(self):
         logger = logging.getLogger(__name__)

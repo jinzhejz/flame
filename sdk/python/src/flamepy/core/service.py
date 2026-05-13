@@ -154,7 +154,7 @@ class FlameInstanceServicer(InstanceServicer):
             logger.debug(f"app_context: {app_context}")
 
             # Common data is bytes in core API
-            common_data_bytes = request.common_data if request.HasField("common_data") and request.common_data else None
+            common_data_bytes = request.common_data if request.HasField("common_data") else None
 
             session_context = SessionContext(
                 _common_data=common_data_bytes,
@@ -185,7 +185,7 @@ class FlameInstanceServicer(InstanceServicer):
         try:
             # Convert protobuf request to TaskContext
             # Task input is bytes in core API
-            input_bytes = request.input if request.HasField("input") and request.input else None
+            input_bytes = request.input if request.HasField("input") else None
 
             task_context = TaskContext(
                 task_id=request.task_id,
@@ -199,7 +199,9 @@ class FlameInstanceServicer(InstanceServicer):
             output_data = self._service.on_task_invoke(task_context)
             logger.debug("on_task_invoke completed successfully")
 
-            # Return task output
+            # Return task output. Leave optional output unset for services that intentionally return None.
+            if output_data is None:
+                return TaskResultProto(return_code=0, message=None)
             return TaskResultProto(return_code=0, output=output_data, message=None)
 
         except Exception as e:

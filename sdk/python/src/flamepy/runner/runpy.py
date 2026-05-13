@@ -90,9 +90,6 @@ class FlameRunpyService(FlameService):
         if isinstance(value, ObjectRef):
             logger.debug(f"Resolving ObjectRef: {value}")
             resolved_value = get_object(value)
-            if resolved_value is None:
-                raise ValueError(f"Failed to retrieve ObjectRef from cache: {value}")
-
             logger.debug(f"Resolved ObjectRef to type: {type(resolved_value)}")
             return resolved_value
 
@@ -103,8 +100,6 @@ class FlameRunpyService(FlameService):
                 object_ref = ObjectRef.decode(value)
                 logger.debug(f"Decoded bytes to ObjectRef: {object_ref}")
                 resolved_value = get_object(object_ref)
-                if resolved_value is None:
-                    raise ValueError(f"Failed to retrieve ObjectRef from cache: {object_ref}")
                 logger.debug(f"Resolved ObjectRef (from bytes) to type: {type(resolved_value)}")
                 return resolved_value
             except Exception as e:
@@ -158,8 +153,6 @@ class FlameRunpyService(FlameService):
         if len(refs) == 1:
             location, original, obj_ref = refs[0]
             resolved = get_object(obj_ref)
-            if resolved is None:
-                raise ValueError(f"Failed to retrieve ObjectRef from cache: {obj_ref}")
 
             if location.startswith("arg:"):
                 idx = int(location.split(":")[1])
@@ -182,8 +175,6 @@ class FlameRunpyService(FlameService):
                 location = future_to_location[future]
                 try:
                     result = future.result()
-                    if result is None:
-                        raise ValueError(f"Failed to retrieve ObjectRef from cache at {location}")
                     resolved_values[location] = result
                 except Exception as e:
                     raise ValueError(f"Failed to resolve ObjectRef at {location}: {e}")

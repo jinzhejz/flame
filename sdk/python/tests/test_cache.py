@@ -3,6 +3,7 @@ import threading
 import bson
 import numpy as np
 import pyarrow as pa
+import pytest
 
 from flamepy.core.cache import (
     _MAGIC_PREFIX_LEN,
@@ -665,8 +666,11 @@ class TestDeleteObjects:
             _object_cache[cache_key3] = Object(version=1, data="data3")
             _object_cache[cache_key4] = Object(version=1, data="data4")
 
+        action_bodies = []
+
         class MockFlightClient:
             def do_action(self, action):
+                action_bodies.append(action.body.to_pybytes().decode("utf-8"))
                 return [type("Result", (), {"body": type("Body", (), {"to_pybytes": lambda: b"OK"})()})()]
 
         class MockContext:
@@ -675,13 +679,96 @@ class TestDeleteObjects:
         monkeypatch.setattr(cache_module, "FlameContext", lambda: MockContext())
         monkeypatch.setattr(cache_module, "_get_flight_client", lambda ep, tls=None: MockFlightClient())
 
-        delete_objects("myapp")
+        delete_objects("myapp/*")
 
         with _cache_lock:
             assert cache_key1 not in _object_cache
             assert cache_key2 not in _object_cache
             assert cache_key3 not in _object_cache
             assert cache_key4 in _object_cache
+
+        assert action_bodies == ["myapp/*"]
+
+    def test_delete_objects_clears_session_without_prefix_bleed(self, monkeypatch):
+        from flamepy.core import cache as cache_module
+        from flamepy.core.types import FlameClientCache
+
+        cache_key1 = ("grpc://host:9090", "myapp/session/obj1")
+        cache_key2 = ("grpc://host:9090", "myapp/session2/obj1")
+        cache_key3 = ("grpc://host:9090", "myapp/session-extra/obj1")
+
+        with _cache_lock:
+            _object_cache[cache_key1] = Object(version=1, data="data1")
+            _object_cache[cache_key2] = Object(version=1, data="data2")
+            _object_cache[cache_key3] = Object(version=1, data="data3")
+
+        action_bodies = []
+
+        class MockFlightClient:
+            def do_action(self, action):
+                action_bodies.append(action.body.to_pybytes().decode("utf-8"))
+                return [type("Result", (), {"body": type("Body", (), {"to_pybytes": lambda: b"OK"})()})()]
+
+        class MockContext:
+            cache = FlameClientCache(endpoint="grpc://host:9090")
+
+        monkeypatch.setattr(cache_module, "FlameContext", lambda: MockContext())
+        monkeypatch.setattr(cache_module, "_get_flight_client", lambda ep, tls=None: MockFlightClient())
+
+        delete_objects("myapp/session")
+
+        with _cache_lock:
+            assert cache_key1 not in _object_cache
+            assert cache_key2 in _object_cache
+            assert cache_key3 in _object_cache
+
+        assert action_bodies == ["myapp/session"]
+
+    def test_delete_objects_clears_exact_full_key(self, monkeypatch):
+        from flamepy.core import cache as cache_module
+        from flamepy.core.types import FlameClientCache
+
+        cache_key1 = ("grpc://host:9090", "myapp/pkg/file1.tar.gz")
+        cache_key2 = ("grpc://host:9090", "myapp/pkg/file2.tar.gz")
+
+        with _cache_lock:
+            _object_cache[cache_key1] = Object(version=1, data="data1")
+            _object_cache[cache_key2] = Object(version=1, data="data2")
+
+        action_bodies = []
+
+        class MockFlightClient:
+            def do_action(self, action):
+                action_bodies.append(action.body.to_pybytes().decode("utf-8"))
+                return [type("Result", (), {"body": type("Body", (), {"to_pybytes": lambda: b"OK"})()})()]
+
+        class MockContext:
+            cache = FlameClientCache(endpoint="grpc://host:9090")
+
+        monkeypatch.setattr(cache_module, "FlameContext", lambda: MockContext())
+        monkeypatch.setattr(cache_module, "_get_flight_client", lambda ep, tls=None: MockFlightClient())
+
+        delete_objects("myapp/pkg/file1.tar.gz")
+
+        with _cache_lock:
+            assert cache_key1 not in _object_cache
+            assert cache_key2 in _object_cache
+
+        assert action_bodies == ["myapp/pkg/file1.tar.gz"]
+
+    def test_delete_objects_rejects_invalid_path_before_remote_action(self, monkeypatch):
+        from flamepy.core import cache as cache_module
+
+        def fail_get_flight_client(endpoint, tls=None):
+            raise AssertionError("remote client should not be created for invalid paths")
+
+        monkeypatch.setattr(cache_module, "_get_flight_client", fail_get_flight_client)
+
+        with pytest.raises(ValueError):
+            delete_objects("myapp")
+
+        with pytest.raises(ValueError):
+            delete_objects("a/b/c/d")
 
 
 class TestUploadDownloadObject:
@@ -788,18 +875,39 @@ class TestUploadDownloadObject:
             cache_module.upload_object("myapp/pkg/test.tar.gz", "/nonexistent/file.tar.gz")
 
     def test_upload_object_invalid_key_format(self, tmp_path):
-        import pytest
-
         from flamepy.core import cache as cache_module
 
         test_file = tmp_path / "test.tar.gz"
         test_file.write_bytes(b"test content")
 
-        with pytest.raises(ValueError, match="Invalid key format"):
+        with pytest.raises(ValueError):
             cache_module.upload_object("invalid", str(test_file))
 
-        with pytest.raises(ValueError, match="Invalid key format"):
+        with pytest.raises(ValueError):
             cache_module.upload_object("a/b/c/d", str(test_file))
+
+    @pytest.mark.parametrize(
+        "key_or_prefix",
+        [
+            "/session",
+            "app/",
+            "../session",
+            "app/../obj",
+            "app/session/",
+            "*/session",
+            "app/*",
+            "app/*/obj",
+            "app/session/*",
+        ],
+    )
+    def test_upload_object_validation_comes_from_object_key(self, key_or_prefix, tmp_path):
+        from flamepy.core import cache as cache_module
+
+        test_file = tmp_path / "test.tar.gz"
+        test_file.write_bytes(b"test content")
+
+        with pytest.raises(ValueError):
+            cache_module.upload_object(key_or_prefix, str(test_file))
 
     def test_download_object(self, monkeypatch, tmp_path):
         import pyarrow as pa
@@ -871,9 +979,14 @@ class TestObjectKey:
         assert key.session_id == "pkg"
         assert key.object_id == "file.tar.gz"
 
-    def test_from_prefix_invalid(self):
-        import pytest
+    def test_from_path_accepts_prefix_and_full_key(self):
+        prefix = ObjectKey.from_path("myapp/pkg")
+        full_key = ObjectKey.from_path("myapp/pkg/file.tar.gz")
 
+        assert prefix == ObjectKey(app_name="myapp", session_id="pkg")
+        assert full_key == ObjectKey(app_name="myapp", session_id="pkg", object_id="file.tar.gz")
+
+    def test_from_prefix_invalid(self):
         with pytest.raises(ValueError):
             ObjectKey.from_prefix("invalid")
 
@@ -881,10 +994,43 @@ class TestObjectKey:
             ObjectKey.from_prefix("a/b/c")
 
     def test_from_key_invalid(self):
-        import pytest
-
         with pytest.raises(ValueError):
             ObjectKey.from_key("a/b")
 
         with pytest.raises(ValueError):
             ObjectKey.from_key("a/b/c/d")
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/session",
+            "app/",
+            "../session",
+            "app/../obj",
+            "app/session/",
+            "*/session",
+            "app/*/obj",
+            "app/session/*",
+        ],
+    )
+    def test_from_path_rejects_invalid_components(self, path):
+        with pytest.raises(ValueError):
+            ObjectKey.from_path(path)
+
+    def test_matches_key(self):
+        all_sessions = ObjectKey.for_all_sessions("myapp")
+        session = ObjectKey.from_prefix("myapp/session")
+        exact = ObjectKey.from_key("myapp/session/obj1")
+
+        assert all_sessions.matches_key("myapp/session/obj1")
+        assert all_sessions.matches_key("myapp/other/obj2")
+        assert not all_sessions.matches_key("other/session/obj1")
+        assert session.matches_key("myapp/session/obj1")
+        assert not session.matches_key("myapp/session2/obj1")
+        assert exact.matches_key("myapp/session/obj1")
+        assert not exact.matches_key("myapp/session/obj2")
+        assert not all_sessions.matches_key("myapp")
+        assert not all_sessions.matches_key("myapp/session")
+        assert not all_sessions.matches_key("myapp/session/obj1/extra")
+        assert not session.matches_key("myapp/session")
+        assert not session.matches_key("myapp/session/obj1/extra")

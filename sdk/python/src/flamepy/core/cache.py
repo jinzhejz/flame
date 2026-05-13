@@ -166,10 +166,10 @@ def _cache_remove(key: tuple) -> None:
         _object_cache.pop(key, None)
 
 
-def _cache_remove_prefix(prefix: str) -> None:
-    """Remove all entries matching prefix."""
+def _cache_remove_matching(object_key: "ObjectKey") -> None:
+    """Remove all entries matched by an ObjectKey."""
     with _cache_lock:
-        keys_to_remove = [k for k in _object_cache if k[1].startswith(prefix)]
+        keys_to_remove = [k for k in _object_cache if object_key.matches_key(k[1])]
         for key in keys_to_remove:
             _object_cache.pop(key, None)
 
@@ -238,6 +238,8 @@ class ObjectKey:
     def __post_init__(self):
         if not self.app_name:
             raise ValueError("app_name cannot be empty")
+        if self.app_name == WILDCARD_SESSION:
+            raise ValueError("Wildcard '*' not allowed for app_name")
         if ".." in self.app_name or "\\" in self.app_name or "/" in self.app_name:
             raise ValueError(f"app_name contains invalid characters: '{self.app_name}'")
 
@@ -255,24 +257,39 @@ class ObjectKey:
                 raise ValueError("Wildcard session '*' cannot have object_id")
             if not self.object_id:
                 raise ValueError("object_id cannot be empty string")
-            if ".." in self.object_id or "\\" in self.object_id:
+            if self.object_id == WILDCARD_SESSION:
+                raise ValueError("Wildcard '*' not allowed for object_id")
+            if ".." in self.object_id or "\\" in self.object_id or "/" in self.object_id:
                 raise ValueError(f"object_id contains invalid characters: '{self.object_id}'")
+
+    @classmethod
+    def from_path(cls, path: str) -> "ObjectKey":
+        """Parse from key prefix or full key.
+
+        Accepts '<app>/<ssn>' prefixes and '<app>/<ssn>/<uuid>' full keys.
+        """
+        parts = path.split("/")
+        if len(parts) == 2:
+            return cls(app_name=parts[0], session_id=parts[1], object_id=None)
+        if len(parts) == 3:
+            return cls(app_name=parts[0], session_id=parts[1], object_id=parts[2])
+        raise ValueError(f"Invalid object key path '{path}': expected '<app>/<ssn>' or '<app>/<ssn>/<uuid>' format")
 
     @classmethod
     def from_prefix(cls, prefix: str) -> "ObjectKey":
         """Parse from key prefix '<app>/<ssn>'."""
-        parts = prefix.split("/")
-        if len(parts) != 2:
+        key = cls.from_path(prefix)
+        if key.object_id is not None:
             raise ValueError(f"Invalid key prefix '{prefix}': expected '<app>/<ssn>' format")
-        return cls(app_name=parts[0], session_id=parts[1], object_id=None)
+        return key
 
     @classmethod
     def from_key(cls, key: str) -> "ObjectKey":
         """Parse from full key '<app>/<ssn>/<uuid>'."""
-        parts = key.split("/")
-        if len(parts) != 3:
+        object_key = cls.from_path(key)
+        if object_key.object_id is None:
             raise ValueError(f"Invalid object key '{key}': expected '<app>/<ssn>/<uuid>' format")
-        return cls(app_name=parts[0], session_id=parts[1], object_id=parts[2])
+        return object_key
 
     @classmethod
     def for_shared(cls, app_name: str) -> "ObjectKey":
@@ -305,6 +322,23 @@ class ObjectKey:
         if self.object_id is None:
             return None
         return f"{self.app_name}/{self.session_id}/{self.object_id}"
+
+    def matches_key(self, key: str) -> bool:
+        """Return True if this prefix/full ObjectKey matches a full object key."""
+        if self.is_all_sessions():
+            prefix = f"{self.app_name}/"
+            if not key.startswith(prefix):
+                return False
+            suffix = key[len(prefix) :]
+            session_id, separator, object_id = suffix.partition("/")
+            return bool(session_id and separator and object_id) and "/" not in object_id
+        if self.object_id is None:
+            prefix = f"{self.app_name}/{self.session_id}/"
+            if not key.startswith(prefix):
+                return False
+            object_id = key[len(prefix) :]
+            return bool(object_id) and "/" not in object_id
+        return key == self.to_key()
 
     def __str__(self) -> str:
         return self.to_key() or self.to_prefix()
@@ -898,17 +932,20 @@ def patch_object(ref: ObjectRef, delta: Any) -> "ObjectRef":
 
 
 def delete_objects(key_prefix: str) -> None:
-    """Delete all objects under a key prefix from the cache.
+    """Delete objects matching a key or key prefix from the cache.
 
-    This deletes all objects matching the prefix pattern from the server.
+    This deletes all objects matching the key or prefix pattern from the server.
     Also clears any matching entries from the client-side cache.
 
     Args:
-        key_prefix: Key prefix in format "<app>/*" (all sessions) or "<app>/<session>"
+        key_prefix: Key in format "<app>/<session>/<object>" or key prefix in
+            format "<app>/*" (all sessions) or "<app>/<session>"
 
     Raises:
         ValueError: If key_prefix format is invalid or cache not configured
     """
+    object_key = ObjectKey.from_path(key_prefix)
+
     context = _get_cached_context()
     cache_config = context.cache
 
@@ -930,18 +967,13 @@ def delete_objects(key_prefix: str) -> None:
 
     client = _get_flight_client(cache_endpoint, cache_tls)
 
-    action = flight.Action("DELETE", key_prefix.encode("utf-8"))
+    action = flight.Action("DELETE", str(object_key).encode("utf-8"))
     results = list(client.do_action(action))
 
     if not results:
         raise ValueError("No result received from DELETE action")
 
-    if key_prefix.endswith("/*"):
-        app_prefix = key_prefix[:-1]
-    else:
-        app_prefix = f"{key_prefix}/"
-
-    _cache_remove_prefix(app_prefix)
+    _cache_remove_matching(object_key)
 
 
 _UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
@@ -968,12 +1000,8 @@ def upload_object(key_or_prefix: str, file_path: str) -> ObjectRef:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    parts = key_or_prefix.split("/")
-    if len(parts) == 2:
-        ObjectKey.from_prefix(key_or_prefix)
-    elif len(parts) == 3:
-        ObjectKey.from_key(key_or_prefix)
-    else:
+    object_key = ObjectKey.from_path(key_or_prefix)
+    if object_key.is_all_sessions():
         raise ValueError(f"Invalid key format: {key_or_prefix}")
 
     context = _get_cached_context()
@@ -1003,7 +1031,7 @@ def upload_object(key_or_prefix: str, file_path: str) -> ObjectRef:
     )
 
     client = _get_flight_client(cache_endpoint, cache_tls)
-    descriptor = flight.FlightDescriptor.for_path(key_or_prefix)
+    descriptor = flight.FlightDescriptor.for_path(str(object_key))
     options = flight.FlightCallOptions(timeout=300)
 
     file_size = os.path.getsize(file_path)

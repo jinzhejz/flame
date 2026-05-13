@@ -139,6 +139,8 @@ impl ObjectKey {
     pub fn matches(&self, key_str: &str) -> bool {
         if self.is_all_sessions() {
             key_str.starts_with(&format!("{}/", self.app_name))
+        } else if let Some(full_key) = self.to_key() {
+            key_str == full_key
         } else {
             key_str.starts_with(&format!("{}/", self.to_prefix()))
         }
@@ -1467,6 +1469,19 @@ mod tests {
         }
 
         #[test]
+        fn object_key_matches_exact_full_key() {
+            let full_key = ObjectKey::from_path("app/session/uuid").unwrap();
+            let session_key = ObjectKey::from_path("app/session").unwrap();
+            let app_key = ObjectKey::from_path("app/*").unwrap();
+
+            assert!(full_key.matches("app/session/uuid"));
+            assert!(!full_key.matches("app/session/other"));
+            assert!(session_key.matches("app/session/uuid"));
+            assert!(session_key.matches("app/session/other"));
+            assert!(app_key.matches("app/other/uuid"));
+        }
+
+        #[test]
         fn object_key_with_generated_id() {
             let key = ObjectKey::from_path("app/session").unwrap();
             assert!(key.object_id.is_none());
@@ -1762,6 +1777,28 @@ mod tests {
             let all = cache.list_all().await.unwrap();
             assert_eq!(all.len(), 1);
             assert!(all[0].key.starts_with("app/other-session/"));
+        }
+
+        #[tokio::test]
+        async fn delete_removes_exact_object() {
+            let cache = create_test_cache().await;
+
+            let key = ObjectKey::from_path("app/session").unwrap();
+            let meta1 = cache
+                .put(key.clone(), Object::new(0, vec![1]))
+                .await
+                .unwrap();
+            let meta2 = cache
+                .put(key.clone(), Object::new(0, vec![2]))
+                .await
+                .unwrap();
+
+            let delete_key = ObjectKey::from_path(&meta1.key).unwrap();
+            cache.delete(&delete_key).await.unwrap();
+
+            let all = cache.list_all().await.unwrap();
+            assert_eq!(all.len(), 1);
+            assert_eq!(all[0].key, meta2.key);
         }
 
         #[tokio::test]

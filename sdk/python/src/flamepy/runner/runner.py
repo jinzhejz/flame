@@ -263,6 +263,13 @@ class RunnerService:
             if not callable(attr):
                 continue
 
+            if hasattr(type(self), attr_name) or attr_name in self.__dict__:
+                logger.warning(
+                    "Skipping wrapper for method '%s' because it conflicts with RunnerService",
+                    attr_name,
+                )
+                continue
+
             # Create a wrapper for this method
             wrapper = self._create_method_wrapper(attr_name)
             setattr(self, attr_name, wrapper)

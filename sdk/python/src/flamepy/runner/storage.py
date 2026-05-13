@@ -344,13 +344,13 @@ class CacheStorage(StorageBackend):
             raise FlameError(FlameErrorCode.INTERNAL, f"Failed to download package from cache: {str(e)}")
 
     def delete(self, filename: str) -> None:
-        from flamepy.core.cache import delete_objects
+        from flamepy.core.cache import ObjectKey, delete_objects
 
         if not self._app_name:
             return
 
         try:
-            key = f"{self._app_name}/pkg/{filename}"
+            key = str(ObjectKey(app_name=self._app_name, session_id="pkg", object_id=filename))
             delete_objects(key)
             logger.debug(f"Deleted package from cache: {key}")
         except Exception as e:
