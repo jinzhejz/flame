@@ -176,16 +176,34 @@ impl StorageEngine for DiskStorage {
     }
 
     async fn delete_objects(&self, key: &ObjectKey) -> Result<(), FlameError> {
-        let dir_to_delete = if key.is_all_sessions() {
-            self.app_dir(key)
+        let object_path = key.object_id.as_ref().map(|_| self.object_path(key));
+        let delta_dir = key.object_id.as_ref().map(|_| self.delta_dir(key));
+        let dir_to_delete = if object_path.is_none() && key.is_all_sessions() {
+            Some(self.app_dir(key))
+        } else if object_path.is_none() {
+            Some(self.session_dir(key))
         } else {
-            self.session_dir(key)
+            None
         };
 
         tokio::task::spawn_blocking(move || {
-            if dir_to_delete.exists() {
-                fs::remove_dir_all(&dir_to_delete)?;
-                tracing::debug!("Deleted directory: {:?}", dir_to_delete);
+            if let Some(path) = object_path {
+                if path.exists() {
+                    fs::remove_file(&path)?;
+                    tracing::debug!("Deleted object file: {:?}", path);
+                }
+            }
+            if let Some(path) = delta_dir {
+                if path.exists() {
+                    fs::remove_dir_all(&path)?;
+                    tracing::debug!("Deleted delta directory: {:?}", path);
+                }
+            }
+            if let Some(path) = dir_to_delete {
+                if path.exists() {
+                    fs::remove_dir_all(&path)?;
+                    tracing::debug!("Deleted directory: {:?}", path);
+                }
             }
             Ok(())
         })
@@ -540,6 +558,28 @@ mod tests {
 
         assert!(storage.read_object(&key1).await.unwrap().is_none());
         assert!(storage.read_object(&key2).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_disk_storage_delete_exact_object() {
+        let temp_dir = tempdir().unwrap();
+        let storage = DiskStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let key1 = test_key("test-app", "test-session", "obj1");
+        let key2 = test_key("test-app", "test-session", "obj2");
+        storage
+            .write_object(&key1, &Object::new(1, vec![1, 2, 3]))
+            .await
+            .unwrap();
+        storage
+            .write_object(&key2, &Object::new(2, vec![4, 5, 6]))
+            .await
+            .unwrap();
+
+        storage.delete_objects(&key1).await.unwrap();
+
+        assert!(storage.read_object(&key1).await.unwrap().is_none());
+        assert!(storage.read_object(&key2).await.unwrap().is_some());
     }
 
     #[tokio::test]

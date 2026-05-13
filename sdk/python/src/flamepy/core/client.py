@@ -65,6 +65,44 @@ from flamepy.proto.types_pb2 import ResourceRequirement as ResourceRequirementPr
 logger = logging.getLogger(__name__)
 
 
+def _optional_field(message: Any, field: str) -> Any:
+    return getattr(message, field) if message.HasField(field) else None
+
+
+def _schema_from_application_spec(spec: ApplicationSpec) -> Optional[ApplicationSchema]:
+    if not spec.HasField("schema"):
+        return None
+    return ApplicationSchema(
+        input=_optional_field(spec.schema, "input"),
+        output=_optional_field(spec.schema, "output"),
+        common_data=_optional_field(spec.schema, "common_data"),
+    )
+
+
+def _application_from_proto(app) -> Application:
+    spec = app.spec
+    environments = {env.name: env.value for env in spec.environments}
+    return Application(
+        id=app.metadata.id,
+        name=app.metadata.name,
+        state=ApplicationState(app.status.state),
+        creation_time=datetime.fromtimestamp(app.status.creation_time / 1000, tz=timezone.utc),
+        shim=Shim(spec.shim),
+        image=_optional_field(spec, "image"),
+        description=_optional_field(spec, "description"),
+        labels=list(spec.labels),
+        command=_optional_field(spec, "command"),
+        arguments=list(spec.arguments),
+        environments=environments,
+        working_directory=_optional_field(spec, "working_directory"),
+        max_instances=_optional_field(spec, "max_instances"),
+        delay_release=_optional_field(spec, "delay_release"),
+        schema=_schema_from_application_spec(spec),
+        url=_optional_field(spec, "url"),
+        installer=_optional_field(spec, "installer"),
+    )
+
+
 def connect(addr: str, tls_config: Optional[FlameClientTls] = None) -> "Connection":
     """Connect to the Flame service.
 
@@ -342,39 +380,7 @@ class Connection:
         try:
             response = self._frontend.ListApplication(request)
 
-            applications = []
-            for app in response.applications:
-                schema = None
-                if app.spec.schema is not None:
-                    schema = ApplicationSchema(
-                        input=app.spec.schema.input,
-                        output=app.spec.schema.output,
-                        common_data=app.spec.schema.common_data,
-                    )
-                environments = {}
-                if app.spec.environments is not None:
-                    for env in app.spec.environments:
-                        environments[env.name] = env.value
-
-                applications.append(
-                    Application(
-                        id=app.metadata.id,
-                        name=app.metadata.name,
-                        state=ApplicationState(app.status.state),
-                        creation_time=datetime.fromtimestamp(app.status.creation_time / 1000, tz=timezone.utc),
-                        shim=Shim(app.spec.shim),
-                        image=app.spec.image,
-                        command=app.spec.command,
-                        arguments=list(app.spec.arguments),
-                        environments=environments,
-                        working_directory=app.spec.working_directory,
-                        max_instances=app.spec.max_instances,
-                        delay_release=app.spec.delay_release,
-                        schema=schema,
-                        url=app.spec.url if app.spec.HasField("url") else None,
-                        installer=app.spec.installer if app.spec.HasField("installer") else None,
-                    )
-                )
+            applications = [_application_from_proto(app) for app in response.applications]
 
             return applications
 
@@ -387,36 +393,7 @@ class Connection:
 
         try:
             response = self._frontend.GetApplication(request)
-            schema = None
-            if response.spec.schema is not None:
-                schema = ApplicationSchema(
-                    input=response.spec.schema.input,
-                    output=response.spec.schema.output,
-                    common_data=response.spec.schema.common_data,
-                )
-
-            environments = {}
-            if response.spec.environments is not None:
-                for env in response.spec.environments:
-                    environments[env.name] = env.value
-
-            return Application(
-                id=response.metadata.id,
-                name=response.metadata.name,
-                state=ApplicationState(response.status.state),
-                creation_time=datetime.fromtimestamp(response.status.creation_time / 1000, tz=timezone.utc),
-                shim=Shim(response.spec.shim),
-                image=response.spec.image,
-                command=response.spec.command,
-                arguments=list(response.spec.arguments),
-                environments=environments,
-                working_directory=response.spec.working_directory,
-                max_instances=response.spec.max_instances,
-                delay_release=response.spec.delay_release,
-                schema=schema,
-                url=response.spec.url if response.spec.HasField("url") else None,
-                installer=response.spec.installer if response.spec.HasField("installer") else None,
-            )
+            return _application_from_proto(response)
 
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.NOT_FOUND:
@@ -454,7 +431,7 @@ class Connection:
         try:
             response = self._frontend.CreateSession(request)
             # Common data is bytes in core API
-            common_data_bytes = response.spec.common_data if response.spec.HasField("common_data") and response.spec.common_data else None
+            common_data_bytes = response.spec.common_data if response.spec.HasField("common_data") else None
 
             session = Session(
                 connection=self,
@@ -483,7 +460,7 @@ class Connection:
             sessions = []
             for session in response.sessions:
                 # Common data is bytes in core API
-                common_data_bytes = session.spec.common_data if session.spec.HasField("common_data") and session.spec.common_data else None
+                common_data_bytes = session.spec.common_data if session.spec.HasField("common_data") else None
 
                 sessions.append(
                     Session(
@@ -540,7 +517,7 @@ class Connection:
         try:
             response = self._frontend.OpenSession(request)
             # Common data is bytes in core API
-            common_data_bytes = response.spec.common_data if response.spec.HasField("common_data") and response.spec.common_data else None
+            common_data_bytes = response.spec.common_data if response.spec.HasField("common_data") else None
 
             return Session(
                 connection=self,
@@ -567,7 +544,7 @@ class Connection:
             response = self._frontend.GetSession(request)
 
             # Common data is bytes in core API
-            common_data_bytes = response.spec.common_data if response.spec.HasField("common_data") and response.spec.common_data else None
+            common_data_bytes = response.spec.common_data if response.spec.HasField("common_data") else None
 
             return Session(
                 connection=self,
@@ -594,7 +571,7 @@ class Connection:
             response = self._frontend.CloseSession(request)
 
             # Common data is bytes in core API
-            common_data_bytes = response.spec.common_data if response.spec.HasField("common_data") and response.spec.common_data else None
+            common_data_bytes = response.spec.common_data if response.spec.HasField("common_data") else None
 
             return Session(
                 connection=self,
@@ -709,8 +686,8 @@ class Session:
                 session_id=self.id,
                 state=TaskState(response.status.state),
                 creation_time=datetime.fromtimestamp(response.status.creation_time / 1000, tz=timezone.utc),
-                input=response.spec.input if response.spec.HasField("input") and response.spec.input else None,
-                output=response.spec.output if response.spec.HasField("output") and response.spec.output else None,
+                input=response.spec.input if response.spec.HasField("input") else None,
+                output=response.spec.output if response.spec.HasField("output") else None,
                 completion_time=(datetime.fromtimestamp(response.status.completion_time / 1000, tz=timezone.utc) if response.status.HasField("completion_time") else None),
                 events=[
                     Event(
@@ -835,8 +812,8 @@ def _task_from_proto(response, session_id: str) -> Task:
         session_id=session_id,
         state=TaskState(response.status.state),
         creation_time=datetime.fromtimestamp(response.status.creation_time / 1000, tz=timezone.utc),
-        input=response.spec.input if response.spec.HasField("input") and response.spec.input else None,
-        output=response.spec.output if response.spec.HasField("output") and response.spec.output else None,
+        input=response.spec.input if response.spec.HasField("input") else None,
+        output=response.spec.output if response.spec.HasField("output") else None,
         completion_time=(datetime.fromtimestamp(response.status.completion_time / 1000, tz=timezone.utc) if response.status.HasField("completion_time") else None),
         events=[
             Event(

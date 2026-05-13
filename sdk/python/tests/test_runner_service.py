@@ -207,6 +207,41 @@ def test_runnerservice_close_closes_session():
     mock_session.close.assert_called_once()
 
 
+def test_runnerservice_does_not_overwrite_close_with_user_method():
+    """Test generated wrappers do not replace RunnerService lifecycle methods."""
+    from flamepy.runner.runner import RunnerService
+
+    class ServiceWithClose:
+        def close(self):
+            return "user-close"
+
+    rs = object.__new__(RunnerService)
+    rs._app = "test-app"
+    rs._execution_object = ServiceWithClose()
+    rs._function_wrapper = None
+    rs._session = MagicMock()
+
+    rs._generate_wrappers()
+    rs.close()
+
+    rs._session.close.assert_called_once()
+
+
+def test_runpy_resolves_object_ref_to_cached_none():
+    """Test cached None is a valid ObjectRef value, not a retrieval miss."""
+    from flamepy.core.cache import ObjectRef
+    from flamepy.runner.runpy import FlameRunpyService
+
+    svc = FlameRunpyService()
+    ref = ObjectRef(endpoint="grpc://host:9090", key="app/session/object", version=1)
+
+    with patch("flamepy.runner.runpy.get_object", return_value=None):
+        assert svc._resolve_object_ref(ref) is None
+        args, kwargs = svc._resolve_object_refs_parallel((ref,), {"value": ref})
+        assert args == (None,)
+        assert kwargs == {"value": None}
+
+
 def test_runner_get_resolves_futures():
     """Test Runner.get() resolves multiple ObjectFutures."""
     from flamepy.runner.runner import ObjectFuture, Runner

@@ -172,6 +172,38 @@ class TestSessionOperations:
         )
         assert session.common_data() == b"test-data"
 
+    def test_session_get_task_preserves_empty_optional_bytes(self):
+        from flamepy.core.client import Session, SessionState
+        from flamepy.proto.types_pb2 import Metadata, Task, TaskSpec, TaskStatus
+
+        class DummyFrontendWithTask:
+            def GetTask(self, req):  # noqa: N802
+                task = Task(
+                    metadata=Metadata(id="task-1"),
+                    spec=TaskSpec(session_id=req.session_id, input=b"", output=b""),
+                    status=TaskStatus(state=2, creation_time=int(time.time() * 1000)),
+                )
+                return task
+
+        connection = type("Conn", (), {"_frontend": DummyFrontendWithTask(), "_executor": None, "close": lambda self: None})()
+        session = Session(
+            connection=connection,
+            id="sess-test",
+            application="test-app",
+            state=SessionState.OPEN,
+            creation_time=datetime.now(timezone.utc),
+            pending=0,
+            running=0,
+            succeed=0,
+            failed=0,
+            completion_time=None,
+        )
+
+        task = session.get_task("task-1")
+
+        assert task.input == b""
+        assert task.output == b""
+
     def test_session_create_task_rejects_non_bytes(self):
         session = self.create_test_session()
         with pytest.raises(FlameError) as exc_info:
@@ -244,6 +276,63 @@ class TestGrpcErrorMapping:
 
         error = client.Connection._grpc_error_to_flame_error(FakeRpcError(), "test operation")
         assert error.code == FlameErrorCode.INTERNAL
+
+
+class TestApplicationConversion:
+    def test_list_applications_preserves_absent_optional_fields(self):
+        from flamepy.proto.types_pb2 import Application as ApplicationProto
+        from flamepy.proto.types_pb2 import ApplicationList, ApplicationStatus, Metadata
+
+        class Frontend:
+            def ListApplication(self, req):  # noqa: N802
+                app = ApplicationProto(
+                    metadata=Metadata(id="app-1", name="app"),
+                    status=ApplicationStatus(state=0, creation_time=int(time.time() * 1000)),
+                )
+                return ApplicationList(applications=[app])
+
+        conn = client.Connection("http://unused", DummyChannel("unused"), Frontend())
+        try:
+            apps = conn.list_applications()
+        finally:
+            conn.close()
+
+        assert len(apps) == 1
+        app = apps[0]
+        assert app.image is None
+        assert app.command is None
+        assert app.working_directory is None
+        assert app.max_instances is None
+        assert app.delay_release is None
+        assert app.schema is None
+        assert app.url is None
+        assert app.installer is None
+
+    def test_get_application_preserves_present_empty_optional_fields(self):
+        from flamepy.proto.types_pb2 import Application as ApplicationProto
+        from flamepy.proto.types_pb2 import ApplicationSchema, ApplicationStatus, Metadata
+
+        class Frontend:
+            def GetApplication(self, req):  # noqa: N802
+                app = ApplicationProto(
+                    metadata=Metadata(id="app-1", name=req.name),
+                    status=ApplicationStatus(state=0, creation_time=int(time.time() * 1000)),
+                )
+                app.spec.image = ""
+                app.spec.schema.CopyFrom(ApplicationSchema(input=""))
+                return app
+
+        conn = client.Connection("http://unused", DummyChannel("unused"), Frontend())
+        try:
+            app = conn.get_application("app")
+        finally:
+            conn.close()
+
+        assert app.image == ""
+        assert app.command is None
+        assert app.schema is not None
+        assert app.schema.input == ""
+        assert app.schema.output is None
 
 
 class TestTaskWatcher:

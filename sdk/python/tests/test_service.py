@@ -179,7 +179,63 @@ def test_on_task_invoke_exception_path():  # noqa: N802
     req = MockTaskRequest()
     resp = servicer.OnTaskInvoke(req, DummyContext())
     assert resp.return_code == -1
-    assert getattr(resp, "output", None) is None
+    assert not resp.HasField("output")
+
+
+def test_service_preserves_empty_optional_bytes():  # noqa: N802
+    class CaptureService(service.FlameService):
+        def __init__(self):
+            self.session_context = None
+            self.task_context = None
+
+        def on_session_enter(self, context: service.SessionContext):
+            self.session_context = context
+            return True
+
+        def on_task_invoke(self, context: service.TaskContext):
+            self.task_context = context
+            return None
+
+        def on_session_leave(self):
+            return True
+
+    svc = CaptureService()
+    servicer = service.FlameInstanceServicer(svc)
+
+    class MockAppCtx:
+        name = "app"
+        image = None
+        command = None
+        working_directory = None
+        url = None
+
+        def HasField(self, field):  # noqa: N802
+            return False
+
+    class MockSessionEnterRequest:
+        session_id = "sess"
+        application = MockAppCtx()
+        common_data = b""
+
+        def HasField(self, field):  # noqa: N802
+            return field == "common_data"
+
+    class MockTaskRequest:
+        task_id = "task"
+        session_id = "sess"
+        input = b""
+
+        def HasField(self, field):  # noqa: N802
+            return field == "input"
+
+    enter_resp = servicer.OnSessionEnter(MockSessionEnterRequest(), DummyContext())
+    invoke_resp = servicer.OnTaskInvoke(MockTaskRequest(), DummyContext())
+
+    assert enter_resp.return_code == 0
+    assert svc.session_context.common_data() == b""
+    assert invoke_resp.return_code == 0
+    assert not invoke_resp.HasField("output")
+    assert svc.task_context.input == b""
 
 
 def test_flame_instance_server_start_and_stop(monkeypatch, tmp_path):
