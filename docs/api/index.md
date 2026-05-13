@@ -32,10 +32,15 @@ package flame.v1;
 Flame supports TLS for secure communication. Configure TLS certificates in your client configuration:
 
 ```yaml
+current-context: flame
 contexts:
   - name: flame
     cluster:
       endpoint: "https://flame-session-manager:8080"
+      tls:
+        ca_file: "/etc/flame/certs/ca.crt"
+    cache:
+      endpoint: "grpcs://flame-object-cache:9090"
       tls:
         ca_file: "/etc/flame/certs/ca.crt"
 ```
@@ -55,7 +60,7 @@ gRPC status codes are used for error reporting:
 
 ## Related Documentation
 
-- [Flame Architecture](../README.md)
-- [Quick Start Guide](../tutorials/)
+- [Flame README](../../README.md)
+- [Local Development](../tutorials/local-development.md)
+- [Runner Setup Guide](../tutorials/runner-setup.md)
 - [Python SDK](../../sdk/python/README.md)
-- [Rust SDK](../../sdk/rust/README.md)

@@ -1,219 +1,176 @@
 # Local Development with Flame
 
-This guide explains how to set up a local Flame cluster for development and testing without Docker.
+This guide sets up a single-node Flame cluster from the local source tree without Docker.
 
 ## Prerequisites
 
-- Rust toolchain (1.70.0+)
-- Python 3.8+
-- pip/pip3
+- Rust toolchain
+- Python 3.12, or another version passed with `flmadm install --python-version`
+- `uv`
 - Git
 
-## Quick Start
+The helper script also starts a temporary HTTP package server with `dufs`; install `dufs` only if you use `hack/local-test.sh`.
 
-### Using the Helper Script
+## Install
 
-The fastest way to get started is using the `local-test.sh` helper script:
-
-```bash
-# Install Flame locally
-./hack/local-test.sh install
-
-# Start Flame services
-./hack/local-test.sh start
-
-# Check service status
-./hack/local-test.sh status
-
-# Run E2E tests
-./hack/local-test.sh test
-
-# View logs
-./hack/local-test.sh logs
-
-# Stop services
-./hack/local-test.sh stop
-
-# Clean up (stop and uninstall)
-./hack/local-test.sh clean
-```
-
-### Using Make Targets
-
-You can also use Make targets directly:
-
-```bash
-# Install Flame to /tmp/flame-dev
-make install-dev
-
-# Start services manually
-/tmp/flame-dev/bin/flame-session-manager --config /tmp/flame-dev/conf/flame-cluster.yaml &
-/tmp/flame-dev/bin/flame-executor-manager --config /tmp/flame-dev/conf/flame-cluster.yaml &
-
-# Run tests
-make e2e-py-local
-
-# Uninstall
-make uninstall-dev
-```
-
-### Custom Installation Path
-
-Set the `INSTALL_PREFIX` environment variable to customize the installation location:
-
-```bash
-export INSTALL_PREFIX=$HOME/flame
-make install-dev
-```
-
-## Manual Installation
-
-### Step 1: Build Flame
-
-Build all components in release mode:
+Build all release artifacts:
 
 ```bash
 cargo build --release
 ```
 
-### Step 2: Install with flmadm
-
-Install Flame to a local directory (no root required):
+Install all Flame components into `/tmp/flame-dev`:
 
 ```bash
 ./target/release/flmadm install \
+    --all \
     --src-dir . \
     --skip-build \
     --no-systemd \
     --prefix /tmp/flame-dev
 ```
 
-This will:
-- Create directory structure at `/tmp/flame-dev`
-- Install binaries (session-manager, executor-manager, flmctl, flmadm)
-- Install Python SDK
-- Generate default configuration
+`flmadm` requires an explicit profile flag. For local development, `--all` installs the control plane, worker, object cache, client tools, and Python SDK.
 
-### Step 3: Start Services
+## Start Services
+
+Start the object cache:
+
+```bash
+FLAME_HOME=/tmp/flame-dev \
+/tmp/flame-dev/bin/flame-object-cache \
+    --config /tmp/flame-dev/conf/flame-cluster.yaml \
+    > /tmp/flame-dev/logs/cache.log 2>&1 &
+```
 
 Start the session manager:
 
 ```bash
+FLAME_HOME=/tmp/flame-dev \
 /tmp/flame-dev/bin/flame-session-manager \
     --config /tmp/flame-dev/conf/flame-cluster.yaml \
     > /tmp/flame-dev/logs/fsm.log 2>&1 &
 ```
 
-Wait a few seconds, then start the executor manager:
+Start the executor manager:
 
 ```bash
+FLAME_HOME=/tmp/flame-dev \
 /tmp/flame-dev/bin/flame-executor-manager \
     --config /tmp/flame-dev/conf/flame-cluster.yaml \
     > /tmp/flame-dev/logs/fem.log 2>&1 &
 ```
 
-### Step 4: Verify Installation
-
-Check that services are running:
+Verify the cluster:
 
 ```bash
-ps aux | grep flame
+/tmp/flame-dev/bin/flmctl list application
 ```
 
-Test with flmctl:
+The built-in applications should include `flmping`, `flmexec`, and `flmrun`.
+
+## Client Configuration
+
+The Python SDK can use environment variables:
 
 ```bash
-/tmp/flame-dev/bin/flmctl list
+export FLAME_ENDPOINT=http://127.0.0.1:8080
+export FLAME_CACHE_ENDPOINT=grpc://127.0.0.1:9090
 ```
 
-## Running Tests
+Or create `~/.flame/flame.yaml`:
 
-### Python E2E Tests
+```yaml
+---
+current-context: flame
+contexts:
+  - name: flame
+    cluster:
+      endpoint: "http://127.0.0.1:8080"
+    cache:
+      endpoint: "grpc://127.0.0.1:9090"
+    package:
+      excludes:
+        - "*.log"
+        - "*.pkl"
+        - "*.tmp"
+```
 
-Run Python E2E tests against your local cluster:
+`package.storage` is optional. When it is absent, Runner packages are uploaded to the object cache through `cache.endpoint`.
+
+## Run Tests
+
+Run Python E2E tests against the local cluster:
 
 ```bash
 cd e2e
-FLAME_ENDPOINT=http://127.0.0.1:8080 uv run pytest -vv .
+PYTHONPATH="$PWD/src:$PYTHONPATH" \
+FLAME_ENDPOINT=http://127.0.0.1:8080 \
+pytest -vv --durations=0 .
 ```
 
-Or use the Make target:
+The Make target wraps the same local endpoint:
 
 ```bash
 make e2e-py-local
 ```
 
-### Rust Tests
-
-Run Rust tests:
+Run Rust E2E tests:
 
 ```bash
-make e2e-rs
+FLAME_ROOT="$PWD" cargo test --workspace --exclude cri-rs -- --nocapture
 ```
 
-## Development Workflow
+## Development Loop
 
-### Typical Development Cycle
-
-1. **Make code changes** to Flame components
-2. **Rebuild**:
-   ```bash
-   cargo build --release
-   ```
-3. **Stop services**:
-   ```bash
-   ./hack/local-test.sh stop
-   ```
-4. **Reinstall**:
-   ```bash
-   ./target/release/flmadm install \
-       --src-dir . \
-       --skip-build \
-       --no-systemd \
-       --prefix /tmp/flame-dev \
-       --clean
-   ```
-5. **Start services**:
-   ```bash
-   ./hack/local-test.sh start
-   ```
-6. **Test changes**:
-   ```bash
-   ./hack/local-test.sh test
-   ```
-
-### Quick Reinstall
-
-For faster iteration, use the helper script:
+After changing Rust components:
 
 ```bash
-# Stop, rebuild, reinstall, and restart
-./hack/local-test.sh stop
 cargo build --release
-make install-dev
-./hack/local-test.sh start
+./target/release/flmadm install \
+    --all \
+    --src-dir . \
+    --skip-build \
+    --no-systemd \
+    --prefix /tmp/flame-dev \
+    --clean
 ```
 
-## Viewing Logs
+Then restart the three services.
 
-Service logs are written to:
-- Session Manager: `/tmp/flame-dev/logs/fsm.log`
-- Executor Manager: `/tmp/flame-dev/logs/fem.log`
+## Helper Script
 
-View logs with:
+`hack/local-test.sh` wraps install, start, stop, logs, and test commands:
 
 ```bash
-# Using the helper script
-./hack/local-test.sh logs
+./hack/local-test.sh install
+./hack/local-test.sh start
+./hack/local-test.sh status
+./hack/local-test.sh test
+./hack/local-test.sh stop
+```
 
-# Or directly
+The script starts an additional `dufs` server for HTTP package storage, so `dufs` must be installed before `./hack/local-test.sh start`.
+
+## Logs
+
+Service logs are written under `/tmp/flame-dev/logs`:
+
+- `/tmp/flame-dev/logs/cache.log`
+- `/tmp/flame-dev/logs/fsm.log`
+- `/tmp/flame-dev/logs/fem.log`
+
+View recent logs with:
+
+```bash
+tail -f /tmp/flame-dev/logs/cache.log
 tail -f /tmp/flame-dev/logs/fsm.log
 tail -f /tmp/flame-dev/logs/fem.log
 ```
 
 ## Configuration
 
-The default configuration is generated at `/tmp/flame-dev/conf/flame-cluster.yaml`:
+`flmadm` generates `/tmp/flame-dev/conf/flame-cluster.yaml`:
 
 ```yaml
 ---
@@ -221,10 +178,13 @@ cluster:
   name: flame
   endpoint: "http://127.0.0.1:8080"
   resreq: "cpu=1,mem=2g"
-  policy: proportion
-  storage: "sqlite:///tmp/flame-dev/data/sessions.db"
-executors:
-  shim: host
+  policies:
+    - priority
+    - drf
+    - gang
+  storage: "fs:///tmp/flame-dev/data"
+  executors:
+    shim: host
   limits:
     max_executors: 128
 cache:
@@ -233,120 +193,29 @@ cache:
   storage: "/tmp/flame-dev/data/cache"
 ```
 
-You can edit this file to customize your local cluster.
+Restart the services after changing this file.
 
 ## Troubleshooting
 
-### Services Won't Start
+If services do not start, inspect the matching log file first. Common issues are an occupied port, an invalid configuration file, or a missing `FLAME_HOME` environment variable when starting services manually.
 
-Check the logs for errors:
+If a Python client cannot connect, verify `FLAME_ENDPOINT` and `FLAME_CACHE_ENDPOINT`, then confirm the corresponding services are listening on ports `8080` and `9090`.
 
-```bash
-cat /tmp/flame-dev/logs/fsm.log
-cat /tmp/flame-dev/logs/fem.log
-```
-
-Common issues:
-- Port already in use (check with `lsof -i :8080` and `lsof -i :8081`)
-- Configuration file issues
-- Missing dependencies
-
-### Port Conflicts
-
-If ports 8080/8081 are in use, edit the configuration file to use different ports:
-
-```bash
-vim /tmp/flame-dev/conf/flame-cluster.yaml
-# Change endpoint ports
-# Restart services
-```
-
-### Tests Fail to Connect
-
-Ensure:
-1. Services are running: `./hack/local-test.sh status`
-2. Correct endpoint: `export FLAME_ENDPOINT=http://127.0.0.1:8080`
-3. Firewall allows local connections
-
-### Clean Start
-
-For a completely clean start:
-
-```bash
-./hack/local-test.sh clean
-./hack/local-test.sh install
-./hack/local-test.sh start
-```
+If Runner fails to find the `flmrun` template, check that the session manager is running and that `flmctl list application` shows `flmrun`.
 
 ## Cleanup
 
-To remove your local Flame installation:
+Stop the service processes, then uninstall:
 
 ```bash
-# Stop services
-./hack/local-test.sh stop
-
-# Uninstall
-make uninstall-dev
-
-# Or using flmadm directly
 ./target/release/flmadm uninstall \
     --prefix /tmp/flame-dev \
     --no-backup \
     --force
 ```
 
-## CI/CD Integration
-
-The Python E2E CI workflow now uses `flmadm` for installation instead of Docker Compose. See `.github/workflows/e2e-py.yaml` for the implementation.
-
-Key steps in CI:
-1. Build Flame with `cargo build --release`
-2. Install with `flmadm install --no-systemd`
-3. Start services in background
-4. Run tests with `uv run pytest`
-5. Cleanup with `flmadm uninstall`
-
-## Comparison: Docker vs Local
-
-### Docker Compose (Traditional)
-
-**Pros:**
-- Isolated environment
-- Consistent across machines
-- No host system changes
-
-**Cons:**
-- Slower iteration (rebuild images)
-- More resource intensive
-- Harder to debug
-
-**Use for:**
-- Integration testing
-- Multi-node testing
-- Production-like environment
-
-### Local Installation (New)
-
-**Pros:**
-- Faster iteration (no image rebuilds)
-- Easy debugging with logs
-- Native performance
-- Direct access to binaries
-
-**Cons:**
-- Installs on host system
-- May have port conflicts
-- Single-node only
-
-**Use for:**
-- Development
-- Unit/E2E testing
-- Debugging
-- CI/CD (faster)
-
 ## See Also
 
-- [flmadm README](../../flmadm/README.md) - Administration tool documentation
-- [RFE333 Functional Specification](../designs/RFE333-flmadm/FS.md) - Design details
-- [AGENTS.md](../../AGENTS.md) - Development guidelines
+- [flmadm README](../../flmadm/README.md)
+- [Runner Setup Guide](runner-setup.md)
+- [RFE333 Functional Specification](../designs/RFE333-flmadm/FS.md)

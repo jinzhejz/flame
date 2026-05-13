@@ -1,56 +1,72 @@
 # Runner API Setup Guide
 
-This guide explains how to set up and use the Runner API for simplified Python application deployment in Flame.
-
-## Overview
-
-The Runner API provides a simplified way to package, deploy, and run Python applications in Flame without manually building and deploying service packages. It consists of three main components:
-
-1. **Runner**: A context manager that handles packaging, uploading, and application registration
-2. **RunnerService**: A service wrapper that exposes execution objects as remote Flame services
-3. **ObjectFuture**: A future that resolves to cached objects for efficient data handling
+The Runner API packages the current Python project, registers a temporary Flame application from the `flmrun` template, and exposes Python functions, classes, or instances as remote services.
 
 ## Prerequisites
 
-### 1. Configure Package Storage
+- A running Flame cluster with the session manager, executor manager, and object cache.
+- The built-in `flmrun` application registered in Flame.
+- A Python environment that can import `flamepy`.
 
-The Runner API requires a package storage location to be configured in your `flame.yaml` file. Add the `package` section under your cluster configuration:
+Verify the template application:
+
+```python
+import flamepy
+
+flmrun = flamepy.get_application("flmrun")
+if flmrun is None:
+    raise RuntimeError("flmrun application is not registered")
+```
+
+## Client Configuration
+
+Runner reads `~/.flame/flame.yaml` through `flamepy.core.FlameContext`. A minimal local configuration is:
 
 ```yaml
 ---
-current-cluster: flame
-clusters:
+current-context: flame
+contexts:
   - name: flame
-    endpoint: "http://127.0.0.1:30080"
-    cache: "http://127.0.0.1:30090"
+    cluster:
+      endpoint: "http://127.0.0.1:8080"
+    cache:
+      endpoint: "grpc://127.0.0.1:9090"
     package:
-      storage: "file:///opt/flame/packages"
       excludes:
         - "*.log"
         - "*.pkl"
         - "*.tmp"
 ```
 
-**Note**: Currently, only `file://` URLs are supported. The storage location must be:
-- A shared filesystem accessible by all Flame executor nodes (e.g., NFS)
-- Writable by the client
-- Readable by the executor nodes
+`package.storage` is optional. When it is absent, Runner uploads packages to the Flame object cache through `cache.endpoint`.
 
-### 2. Ensure flmrun Application is Registered
+Supported package storage schemes:
 
-The Runner API requires the `flmrun` application to be registered in Flame. This application should be pre-registered by your Flame deployment. Verify it exists:
+- `grpc://` and `grpcs://`: Flame object cache storage.
+- `file://`: shared filesystem storage.
+- `http://` and `https://`: HTTP storage with PUT, GET, and DELETE support.
 
-```python
-import flamepy
+Example with explicit HTTP package storage:
 
-# Check if flmrun is available
-apps = flamepy.list_applications()
-print([app.name for app in apps])
+```yaml
+package:
+  storage: "http://127.0.0.1:5050/packages"
+  excludes:
+    - "*.log"
+    - "data/"
+    - "models/"
+```
+
+Use `runner.template` only when the cluster uses a custom template application name:
+
+```yaml
+runner:
+  template: "flmrun"
 ```
 
 ## Basic Usage
 
-### Example 1: Simple Function
+### Function Service
 
 ```python
 from flamepy.runner import Runner
@@ -58,19 +74,15 @@ from flamepy.runner import Runner
 def sum_fn(a: int, b: int) -> int:
     return a + b
 
-# Use Runner as a context manager
-with Runner("my-app") as rr:
-    # Create a service from the function
-    sum_service = rr.service(sum_fn)
-    
-    # Call the function remotely
+with Runner("sum-app") as runner:
+    sum_service = runner.service(sum_fn)
     result = sum_service(1, 3)
-    
-    # Get the result
-    print(result.get())  # Output: 4
+    print(result.get())
 ```
 
-### Example 2: Class with State
+Functions default to autoscaling sessions.
+
+### Class or Instance Service
 
 ```python
 from flamepy.runner import Runner
@@ -78,208 +90,140 @@ from flamepy.runner import Runner
 class Counter:
     def __init__(self, initial: int = 0):
         self._count = initial
-    
-    def add(self, a: int) -> int:
-        self._count = self._count + a
-        return self._count
-    
-    def get_counter(self) -> int:
+
+    def add(self, value: int) -> int:
+        self._count += value
         return self._count
 
-with Runner("counter-app") as rr:
-    # Create a service with a class (auto-instantiated)
-    cnt_s = rr.service(Counter)
-    cnt_s.add(1)
-    cnt_s.add(3)
-    result = cnt_s.get_counter()
-    print(result.get())  # Output: 4
-    
-    # Create a service with an instance
-    cnt_os = rr.service(Counter(10))
-    cnt_os.add(1)
-    cnt_os.add(3)
-    result = cnt_os.get_counter()
-    print(result.get())  # Output: 14
+    def get(self) -> int:
+        return self._count
+
+with Runner("counter-app") as runner:
+    counter = runner.service(Counter(10), stateful=True, warmup=1)
+    counter.add(1).wait()
+    counter.add(3).wait()
+    print(counter.get().get())
 ```
 
-### Example 3: Using ObjectFuture as Arguments
+Classes and instances default to fixed sessions. Passing `warmup=N` with `autoscale=False` creates `N` fixed instances. Use `stateful=True` only with instances, not classes.
 
-For large objects, you can pass `ObjectFuture` instances as arguments to avoid unnecessary data transfer:
+### Passing ObjectFuture Values
+
+Remote calls return `ObjectFuture`. Passing an `ObjectFuture` into another remote call sends the underlying `ObjectRef` instead of fetching and re-uploading the object.
 
 ```python
 from flamepy.runner import Runner
 
-class Counter:
-    def __init__(self, initial: int = 0):
-        self._count = initial
-    
-    def add(self, a: int) -> int:
-        self._count = self._count + a
-        return self._count
-    
-    def get_counter(self) -> int:
-        return self._count
+def double(value: int) -> int:
+    return value * 2
 
-with Runner("counter-app") as rr:
-    cnt_os = rr.service(Counter(10))
-    cnt_os.add(1)
-    cnt_os.add(3)
-    res_r = cnt_os.get_counter()
-    
-    # Pass ObjectFuture as argument (efficient for large objects)
-    cnt_os.add(res_r)
-    res_r2 = cnt_os.get_counter()
-    print(res_r2.get())  # Output: 28
+def add(a: int, b: int) -> int:
+    return a + b
+
+with Runner("chain-app") as runner:
+    double_service = runner.service(double)
+    add_service = runner.service(add)
+
+    first = double_service(21)
+    total = add_service(first, 8)
+    print(total.get())
 ```
 
 ## API Reference
 
 ### Runner
 
-**Constructor**: `Runner(name: str)`
-- `name`: The name of the application/package
+Constructor:
 
-**Methods**:
-- `service(execution_object: Any) -> RunnerService`: Create a RunnerService for the given execution object
-  - If `execution_object` is a class, it will be instantiated using its default constructor
-  - If `execution_object` is a function or instance, it will be used as-is
+```python
+Runner(name: str, fail_if_exists: bool = False)
+```
 
-**Context Manager**:
-- `__enter__()`: Packages the current directory, uploads to storage, and registers the application
-- `__exit__()`: Closes all services, unregisters the application, and cleans up storage
+- `name`: application and package name.
+- `fail_if_exists`: when `True`, raise if the application already exists. The default reuses an existing application and skips cleanup for it.
+
+Methods:
+
+- `service(execution_object, stateful=None, autoscale=None, warmup=0, resreq=None)`: create a `RunnerService`.
+- `get(futures)`: resolve multiple `ObjectFuture` values to concrete objects.
+- `ref(futures)`: resolve multiple `ObjectFuture` values to `ObjectRef` values.
+- `wait(futures)`: wait for multiple futures without fetching objects.
+- `select(futures)`: iterate over futures as they complete.
+- `put_object(obj)`: store a shared object under the runner application prefix.
+- `close()`: close services, unregister the application if Runner registered it, delete cached objects, and remove the uploaded package.
+
+`resreq` accepts `flamepy.ResourceRequirement`, for example:
+
+```python
+import flamepy
+
+with Runner("cpu-app") as runner:
+    svc = runner.service(
+        sum,
+        resreq=flamepy.ResourceRequirement.from_string("cpu=1,mem=1g"),
+    )
+```
 
 ### RunnerService
 
-**Constructor**: `RunnerService(app: str, execution_object: Any)`
-- `app`: The name of the application
-- `execution_object`: The Python object to expose as a service
+`RunnerService` exposes public methods of the function, class, or instance passed to `Runner.service()`.
 
-**Methods**:
-- All public methods of the execution object are exposed as wrapper methods
-- Each wrapper method returns an `ObjectFuture`
-- `close()`: Close the service and clean up resources
+- Function services are callable directly.
+- Class and instance services expose one wrapper method for each public method.
+- Every remote call returns `ObjectFuture`.
+- `close()` closes the underlying Flame session.
+
+Default scaling behavior:
+
+| Execution object | Default `autoscale` | Default `stateful` |
+|------------------|---------------------|--------------------|
+| Function | `True` | `False` |
+| Class | `False` | `False` |
+| Instance | `False` | `False` |
 
 ### ObjectFuture
 
-**Constructor**: `ObjectFuture(future: Future)`
-- `future`: A Future that resolves to an ObjectRef
+Methods:
 
-**Methods**:
-- `ref() -> flamepy.cache.ObjectRef`: Get the ObjectRef (for internal use)
-- `get() -> Any`: Retrieve the concrete object from the cache
+- `get()`: fetch and deserialize the concrete object.
+- `ref()`: return the underlying `flamepy.core.ObjectRef`.
+- `wait()`: wait for completion without fetching the object.
 
-## Package Exclusion Patterns
+## Package Contents
 
-By default, the following patterns are excluded from packages:
-- `.venv`
+Runner packages the current working directory into `dist/<name>.tar.gz`.
+
+Default exclusions include:
+
+- `.venv`, `venv`
 - `__pycache__`
-- `.gitignore`
-- `*.pyc`
+- `.pytest_cache`, `.ruff_cache`, `.mypy_cache`
+- `*.egg-info`
+- `.git`, `.tox`
+- `node_modules`
+- `*.pyc`, `*.pyo`
+- `.DS_Store`
 
-You can add custom exclusion patterns in your `flame.yaml`:
-
-```yaml
-package:
-  storage: "file:///opt/flame/packages"
-  excludes:
-    - "*.log"
-    - "*.pkl"
-    - "*.tmp"
-    - "data/"
-    - "models/"
-```
-
-## Troubleshooting
-
-### Error: "Package configuration is not set"
-
-**Solution**: Add the `package` section to your `flame.yaml` file (see Configuration section above).
-
-### Error: "Failed to get flmrun application template"
-
-**Solution**: Ensure the `flmrun` application is registered in Flame. Contact your Flame administrator.
-
-### Error: "Storage directory does not exist"
-
-**Solution**: Create the storage directory specified in your `flame.yaml` and ensure it's accessible:
-
-```bash
-sudo mkdir -p /opt/flame/packages
-sudo chmod 777 /opt/flame/packages
-```
-
-### Error: "Package path not found"
-
-**Solution**: Ensure the storage location is a shared filesystem accessible by all executor nodes.
+Additional `package.excludes` patterns from `~/.flame/flame.yaml` are merged with those defaults.
 
 ## Working Directory
 
-When the Runner registers an application, it automatically sets the working directory to `/opt/{name}` where `{name}` is your application name. This means:
+Runner derives the registered application's `working_directory` from the `flmrun` template. If the template has a working directory, Runner appends `/<runner-name>`. If the template has no working directory, Runner leaves it unset.
 
-- Your application will execute in `/opt/{name}` on the executor nodes
-- Archive packages will be extracted to `/opt/{name}/extracted_...`
-- Any relative file paths in your code will be relative to `/opt/{name}`
+## Troubleshooting
 
-Example:
-```python
-with Runner("my-app") as rr:
-    # Application will run in /opt/my-app
-    # Archives extracted to /opt/my-app/extracted_my-app
-    service = rr.service(MyClass())
-```
+`Failed to get application template 'flmrun'`: confirm the session manager is running and `flmrun` appears in `flmctl list application`.
 
-## Advanced Usage
+`Storage not configured`: configure `cache.endpoint` or `package.storage`. In a local setup, `cache.endpoint: "grpc://127.0.0.1:9090"` is enough.
 
-### Multiple Services
+`Storage directory does not exist`: for `file://` storage, create the directory on a filesystem that both the client and executor nodes can access.
 
-You can create multiple services within a single Runner context:
+Package upload or download failures: verify the selected storage backend is reachable from both the client and executor nodes. For object-cache storage, check the object-cache service on port `9090`.
 
-```python
-with Runner("multi-app") as rr:
-    sum_service = rr.service(sum_fn)
-    calc_service = rr.service(Calculator())
-    
-    result1 = sum_service(5, 3)
-    result2 = calc_service.multiply(4, 7)
-    
-    print(result1.get())  # Output: 8
-    print(result2.get())  # Output: 28
-```
+Pickle or import errors: keep service functions and classes importable from the packaged project, and make sure executor nodes have the required Python dependencies.
 
-### Using Keyword Arguments
+## See Also
 
-```python
-def greet(name: str, greeting: str = "Hello") -> str:
-    return f"{greeting}, {name}!"
-
-with Runner("greet-app") as rr:
-    greet_service = rr.service(greet)
-    
-    result = greet_service(name="World", greeting="Hi")
-    print(result.get())  # Output: Hi, World!
-```
-
-## Best Practices
-
-1. **Use meaningful application names**: Choose descriptive names for your Runner instances
-2. **Clean up resources**: Always use Runner as a context manager to ensure proper cleanup
-3. **Minimize package size**: Add exclusion patterns for large files that aren't needed
-4. **Use ObjectFuture for large objects**: Pass ObjectFuture instances as arguments instead of fetching and re-sending large objects
-5. **Test locally first**: Verify your code works locally before deploying with Runner
-
-## Limitations
-
-1. **Storage**: Currently only `file://` URLs are supported (NFS or shared filesystem)
-2. **Package size**: Large packages may take time to upload and install
-3. **Pickling**: Execution objects must be picklable (lambdas and local functions may not work)
-4. **Dependencies**: External dependencies must be available on executor nodes or installed via package
-
-## Future Enhancements
-
-The following features are planned for future releases:
-
-- Support for S3 and HTTP storage backends
-- Automatic dependency installation
-- Package caching to avoid re-uploading
-- Force overwrite option for existing packages
-- Package versioning and rollback
+- [Local Development](local-development.md)
+- [Python SDK README](../../sdk/python/README.md)
+- [Runner implementation](../../sdk/python/src/flamepy/runner/runner.py)

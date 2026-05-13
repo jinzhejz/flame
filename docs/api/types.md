@@ -48,22 +48,6 @@ message Result {
 | `return_code` | int32 | 0 for success, non-zero for error |
 | `message` | string | Optional error or status message |
 
-### Acknowledgement
-
-Simple acknowledgement message for streaming RPCs.
-
-```protobuf
-message Acknowledgement {
-  bool success = 1;
-  optional string message = 2;
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `success` | bool | Whether the operation succeeded |
-| `message` | string | Optional status or error message |
-
 ### Event
 
 Event recorded during object lifecycle.
@@ -298,6 +282,7 @@ message ApplicationSpec {
   optional int64 delay_release = 10;
   optional ApplicationSchema schema = 11;
   optional string url = 12;
+  optional string installer = 13;
 }
 ```
 
@@ -315,6 +300,7 @@ message ApplicationSpec {
 | `delay_release` | int64 | Delay before releasing idle executors (ms) |
 | `schema` | ApplicationSchema | Input/output schema definitions |
 | `url` | string | Service URL for remote services |
+| `installer` | string | Optional installer name used by the executor before launching the application |
 
 ### Shim
 
@@ -422,7 +408,6 @@ Current executor state.
 message ExecutorStatus {
   ExecutorState state = 1;
   optional string session_id = 2;
-  optional uint32 batch_index = 3;
 }
 ```
 
@@ -430,7 +415,6 @@ message ExecutorStatus {
 |-------|------|-------------|
 | `state` | ExecutorState | Current state |
 | `session_id` | string | Bound session ID (optional) |
-| `batch_index` | uint32 | Index within batch (0 to batch_size-1) |
 
 ### ExecutorState
 

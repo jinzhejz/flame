@@ -1,7 +1,7 @@
 # Test Plan: Configure Shim in ExecutorManager Instead of Application
 
 **Issue:** [xflops/flame#368](https://github.com/xflops/flame/issues/368)
-**HLD Reference:** [docs/designs/RFE368-shim-config/FS.md](../designs/RFE368-shim-config/FS.md)
+**HLD Reference:** [FS.md](FS.md)
 **Author:** QA
 **Date:** 2026-03-10
 **Status:** Draft

@@ -160,10 +160,10 @@ For more details, see the [flmadm README](flmadm/README.md).
 
 ## Documentation
 
-* [Building AI Agents with Flame](docs/blogs/run-ai-agent-with-flame.md)
-* [Executing LLM-Generated Code with Flame](docs/blogs/run-generated-script-via-flame.md)
-* [Estimating the value of Pi using Monte Carlo](docs/blogs/evaluating-pi-by-monte-carlo.md)
-* [Estimating the value of Pi using Flame Python Client](docs/blogs/evaluating-pi-by-flame-python.md)
+* [API Reference](docs/api/index.md)
+* [Local Development](docs/tutorials/local-development.md)
+* [Runner Setup Guide](docs/tutorials/runner-setup.md)
+* [Design Documents](docs/designs/)
 
 ## API Reference
 
@@ -172,7 +172,7 @@ For more details, see the [flmadm README](flmadm/README.md).
 
 ## Contributing
 
-We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md) for more information.
+We welcome contributions through GitHub issues and pull requests.
 
 ## License
 

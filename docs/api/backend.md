@@ -67,6 +67,12 @@ Bidirectional streaming for node-executor synchronization. Replaces polling-base
 | `executor` | [Executor](types.md#executor) | Executor state update (oneof) |
 | `ack` | `Acknowledgement` | Heartbeat acknowledgement (oneof) |
 
+**Acknowledgement:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp` | int64 | Server acknowledgement timestamp |
+
 ### ReleaseNode
 
 Releases a node from the cluster.
@@ -155,7 +161,6 @@ Initiates binding an executor to a session.
 |-------|------|-------------|
 | `application` | [Application](types.md#application) | Application to run (optional) |
 | `session` | [Session](types.md#session) | Session to bind to (optional) |
-| `batch_index` | uint32 | Index within batch for gang scheduling (optional) |
 
 ### BindExecutorCompleted
 
@@ -210,7 +215,6 @@ Requests a task to execute.
 | Field | Type | Description |
 |-------|------|-------------|
 | `task` | [Task](types.md#task) | Task to execute (optional, None if no tasks) |
-| `batch_index` | uint32 | Batch index for gang scheduling (optional) |
 
 ### CompleteTask
 
