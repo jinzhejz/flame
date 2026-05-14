@@ -11,18 +11,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+# ruff: noqa: I001
+
 from typing import Any, Dict, Optional, Union
 
 import cloudpickle
 
 from flamepy.core import ObjectRef, get_object, put_object
-from flamepy.core.client import (
-    Session as CoreSession,
-)
-from flamepy.core.client import (
-    create_session,
-    open_session,
-)
+from flamepy.core.client import Session as CoreSession, create_session, open_session
 from flamepy.core.types import ResourceRequirement, short_name
 
 

@@ -40,7 +40,9 @@ def get_encoding(soup):
 
 @ins.entrypoint
 def crawler_app(wp: WebPage) -> Summary:
-    text = requests.get(wp.url, headers=headers).text
+    response = requests.get(wp.url, headers=headers)
+    response.raise_for_status()
+    text = response.text
 
     soup = BeautifulSoup(text, "html.parser")
     encoding = get_encoding(soup)
