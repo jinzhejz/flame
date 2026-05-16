@@ -8,6 +8,7 @@ use flame_rs::service::{
     ApplicationContext, FlameInstance, FlameService, SessionContext, TaskContext,
 };
 use flame_rs::{FlameMessage, IntoFlameInstance};
+use serde::Serializer;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, FlameMessage)]
@@ -33,6 +34,18 @@ struct Factor {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, FlameMessage)]
 struct Number {
     value: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, FlameMessage)]
+struct EncodeFailure;
+
+impl serde::Serialize for EncodeFailure {
+    fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        Err(serde::ser::Error::custom("encode failure"))
+    }
 }
 
 #[derive(Default)]
@@ -157,4 +170,11 @@ fn flame_message_decode_errors_are_invalid_config() {
     let err = EchoRequest::decode(b"{").unwrap_err();
 
     assert!(matches!(err, FlameError::InvalidConfig(_)));
+}
+
+#[test]
+fn flame_message_encode_errors_are_internal() {
+    let err = EncodeFailure.encode().unwrap_err();
+
+    assert!(matches!(err, FlameError::Internal(_)));
 }

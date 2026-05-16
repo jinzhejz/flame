@@ -1032,7 +1032,7 @@ Typed message client invocation:
 2. Call `invoke(...)` or `run(...)`.
 3. Decode present successful output through `FromTaskOutput`. For `O: FlameMessage`, call `O::decode`.
 4. Return `Ok(None)` if the service produced no output.
-5. Map serialization failures to `FlameError::InvalidConfig` and decode failures to `FlameError::Internal`.
+5. Preserve the `FlameError` returned by `FlameMessage`. The generated JSON implementation maps encode failures to `FlameError::Internal` and decode failures to `FlameError::InvalidConfig`, matching the service-boundary rules below.
 
 Attribute parsing:
 

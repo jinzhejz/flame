@@ -134,11 +134,11 @@ mod tests {
         fn encode(&self) -> Result<Bytes, FlameError> {
             serde_json::to_vec(self)
                 .map(Bytes::from)
-                .map_err(|e| FlameError::InvalidConfig(e.to_string()))
+                .map_err(|e| FlameError::Internal(e.to_string()))
         }
 
         fn decode(bytes: &[u8]) -> Result<Self, FlameError> {
-            serde_json::from_slice(bytes).map_err(|e| FlameError::Internal(e.to_string()))
+            serde_json::from_slice(bytes).map_err(|e| FlameError::InvalidConfig(e.to_string()))
         }
     }
 
