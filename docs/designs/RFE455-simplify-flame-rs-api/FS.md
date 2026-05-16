@@ -281,7 +281,7 @@ impl Session {
     ) -> Result<Option<O>, FlameError>
     where
         I: IntoTaskInput,
-        O: FromTaskOutput;
+        O: FromTaskOutput + Send + 'static;
 
     pub async fn run<I, O>(
         &self,
@@ -289,7 +289,7 @@ impl Session {
     ) -> Result<TaskHandle<O>, FlameError>
     where
         I: IntoTaskInput,
-        O: FromTaskOutput;
+        O: FromTaskOutput + Send + 'static;
 
     pub fn common_data<T>(&self) -> Result<Option<T>, FlameError>
     where
@@ -303,21 +303,22 @@ impl Session {
 
 ```rust
 pub struct TaskHandle<O> {
-    session: Session,
     task_id: TaskID,
-    _output: std::marker::PhantomData<O>,
+    future: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<O>, FlameError>> + Send + 'static>,
+    >,
 }
 
-impl<O> TaskHandle<O>
-where
-    O: FromTaskOutput,
-{
+impl<O> TaskHandle<O> {
     pub fn id(&self) -> &TaskID;
-    pub async fn wait(self) -> Result<Option<O>, FlameError>;
+}
+
+impl<O> std::future::Future for TaskHandle<O> {
+    type Output = Result<Option<O>, FlameError>;
 }
 ```
 
-The MVP should expose `wait().await` rather than implementing `Future` directly. A `Future` implementation can be added later if its cancellation and error semantics are clear.
+`TaskHandle` is directly awaitable. Awaiting the handle waits for terminal task state, returns decoded output when the task succeeds, and returns a `FlameError` containing task state and event details when the task fails or is cancelled. Dropping a handle does not cancel the remote task in the MVP.
 
 Input conversion is explicit and shared by `invoke(...)` and `run(...)`:
 
@@ -419,7 +420,7 @@ let handles = futures::future::try_join_all(
 .await?;
 
 for handle in handles {
-    let response = handle.wait().await?;
+    let response = handle.await?;
     println!("{response:?}");
 }
 ```
@@ -780,13 +781,14 @@ pub struct Session {
 }
 
 pub struct TaskHandle<O> {
-    session: Session,
     task_id: TaskID,
-    _output: std::marker::PhantomData<O>,
+    future: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<O>, FlameError>> + Send + 'static>,
+    >,
 }
 ```
 
-`TaskHandle` owns a cloned `Session`, which is cheap because the underlying `Connection` is cloneable. Dropping a handle does not cancel the remote task in the MVP. Explicit cancellation can be designed separately if the frontend protocol grows that operation.
+`TaskHandle` stores the created task ID plus an internal future that owns the cloned `Session` needed to watch the remote task to completion. Dropping a handle does not cancel the remote task in the MVP. Explicit cancellation can be designed separately if the frontend protocol grows that operation.
 
 Generated services use a small wrapper:
 
@@ -1095,7 +1097,7 @@ Workflow:
 
 1. Create or open a session once.
 2. Call `ssn.run::<_, ResponseType>(...)` for each request.
-3. Await each `TaskHandle<ResponseType>::wait()` as capacity becomes available.
+3. Await each `TaskHandle<ResponseType>` as capacity becomes available.
 
 Expected outcome:
 
@@ -1171,6 +1173,7 @@ Expected outcome:
   - `IntoTaskInput` implementations encode `FlameMessage` inputs and optional absence
   - `IntoTaskInput for ()` produces absent task input
   - `TaskHandle::id()` returns the created task ID
+  - `TaskHandle` implements `Future<Output = Result<Option<O>, FlameError>>`
 
 - Unit tests for shared `message` helpers:
   - `FlameMessage` derive encodes and decodes a typed payload

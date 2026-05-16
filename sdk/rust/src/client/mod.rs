@@ -12,8 +12,10 @@ limitations under the License.
 */
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use chrono::{DateTime, Duration, Utc};
 use futures::TryFutureExt;
@@ -43,6 +45,8 @@ use crate::apis::{
 use crate::message::{self, FromTaskOutput, IntoCommonData, IntoTaskInput};
 
 type FlameClient = FlameFrontendClient<Channel>;
+type TaskHandleFuture<O> =
+    Pin<Box<dyn Future<Output = Result<Option<O>, FlameError>> + Send + 'static>>;
 
 /// Connect to a Flame service without TLS (plaintext).
 ///
@@ -424,9 +428,8 @@ pub trait TaskInformer: Send + Sync + 'static {
 }
 
 pub struct TaskHandle<O> {
-    session: Session,
     task_id: TaskID,
-    _output: PhantomData<O>,
+    future: TaskHandleFuture<O>,
 }
 
 impl Task {
@@ -695,22 +698,32 @@ impl Session {
     pub async fn invoke<I, O>(&self, input: I) -> Result<Option<O>, FlameError>
     where
         I: IntoTaskInput,
-        O: FromTaskOutput,
+        O: FromTaskOutput + Send + 'static,
     {
-        self.run(input).await?.wait().await
+        self.run(input).await?.await
     }
 
     pub async fn run<I, O>(&self, input: I) -> Result<TaskHandle<O>, FlameError>
     where
         I: IntoTaskInput,
-        O: FromTaskOutput,
+        O: FromTaskOutput + Send + 'static,
     {
         let task = self.create_task(input.into_task_input()?).await?;
-        Ok(TaskHandle {
-            session: self.clone(),
-            task_id: task.id,
-            _output: PhantomData,
-        })
+        let session = self.clone();
+        let session_id = session.id.clone();
+        let task_id = task.id;
+        let future_task_id = task_id.clone();
+        let future = Box::pin(async move {
+            let task = session.wait_task(session_id, future_task_id).await?;
+
+            if !task.is_succeed() {
+                return Err(task_terminal_error(&task));
+            }
+
+            O::from_task_output(task.output)
+        });
+
+        Ok(TaskHandle { task_id, future })
     }
 
     pub fn common_data<T>(&self) -> Result<Option<T>, FlameError>
@@ -874,25 +887,19 @@ impl Session {
     }
 }
 
-impl<O> TaskHandle<O>
-where
-    O: FromTaskOutput,
-{
+impl<O> TaskHandle<O> {
     pub fn id(&self) -> &TaskID {
         &self.task_id
     }
+}
 
-    pub async fn wait(self) -> Result<Option<O>, FlameError> {
-        let task = self
-            .session
-            .wait_task(self.session.id.clone(), self.task_id)
-            .await?;
+impl<O> Unpin for TaskHandle<O> {}
 
-        if !task.is_succeed() {
-            return Err(task_terminal_error(&task));
-        }
+impl<O> Future for TaskHandle<O> {
+    type Output = Result<Option<O>, FlameError>;
 
-        O::from_task_output(task.output)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().future.as_mut().poll(cx)
     }
 }
 
@@ -1305,6 +1312,17 @@ mod tests {
         assert_eq!(attrs.id, "ssn-1");
         let decoded = TestCommonData::decode(&attrs.common_data.unwrap()).unwrap();
         assert_eq!(decoded, common_data);
+    }
+
+    #[tokio::test]
+    async fn task_handle_is_awaitable() {
+        let handle: TaskHandle<()> = TaskHandle {
+            task_id: "task-1".to_string(),
+            future: Box::pin(async { Ok(Some(())) }),
+        };
+
+        assert_eq!(handle.id(), "task-1");
+        assert_eq!(handle.await.unwrap(), Some(()));
     }
 
     /// Regression test for `Session::try_from` creation_time parsing.
