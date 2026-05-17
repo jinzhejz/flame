@@ -97,6 +97,9 @@ sudo flmadm install --worker --force
 # Client installation (no systemd needed)
 flmadm install --client --prefix ~/flame
 
+# Client installation with all example binaries
+flmadm install --client --with-examples --prefix ~/flame
+
 # ERROR: Cannot use --enable with client-only
 # flmadm install --client --enable  # This will fail with an error
 
@@ -140,6 +143,7 @@ sudo flmadm uninstall --backup-dir /backups/flame-backup-2026-01-28
 - `--worker`: Install worker components only (flame-executor-manager, flmping-service, flmexec-service, flamepy)
 - `--cache`: Install cache component only (flame-object-cache)
 - `--client`: Install client components only (flmping, flmexec, flamepy)
+- `--with-examples`: Install all supported example binaries under `${PREFIX}/examples`
 - `--no-systemd`: Skip systemd service generation (for user-local installs)
 - `--enable`: Enable and start systemd services after installation
 - `--skip-build`: Skip building from source (use pre-built binaries)
@@ -238,6 +242,9 @@ ${PREFIX}/
 │   ├── flmctl
 │   └── flmadm
 ├── sdk/python/             # Python SDK
+├── examples/               # Optional example binaries, docs, and manifests from --with-examples
+│   ├── pi/rust/
+│   └── candle/based/
 ├── work/                   # Working directory
 │   ├── sessions/
 │   └── executors/

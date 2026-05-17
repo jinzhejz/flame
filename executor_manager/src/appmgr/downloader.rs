@@ -24,6 +24,7 @@ use common::FlameError;
 
 const HTTP_TIMEOUT_SECS: u64 = 300;
 const GRPC_CONNECT_TIMEOUT_SECS: u64 = 30;
+const GRPC_MAX_MESSAGE_SIZE: usize = usize::MAX;
 
 #[async_trait]
 pub trait PackageDownloader: Send + Sync {
@@ -132,6 +133,7 @@ impl GrpcDownloader {
 impl PackageDownloader for GrpcDownloader {
     async fn download(&self, url: &url::Url, dest_path: &Path) -> Result<(), FlameError> {
         use arrow::array::{Array, BinaryArray};
+        use arrow_flight::flight_service_client::FlightServiceClient;
         use arrow_flight::FlightClient;
         use futures_util::TryStreamExt;
         use tonic::transport::Channel;
@@ -168,7 +170,10 @@ impl PackageDownloader for GrpcDownloader {
                 .map_err(|e| FlameError::Internal(format!("failed to connect to cache: {}", e)))?
         };
 
-        let mut client = FlightClient::new(channel);
+        let inner = FlightServiceClient::new(channel)
+            .max_decoding_message_size(GRPC_MAX_MESSAGE_SIZE)
+            .max_encoding_message_size(GRPC_MAX_MESSAGE_SIZE);
+        let mut client = FlightClient::new_from_inner(inner);
 
         let ticket = arrow_flight::Ticket::new(format!("{}:0", key));
         let mut stream = client

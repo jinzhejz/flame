@@ -876,9 +876,9 @@ fn object_to_batch(object: &Object) -> Result<RecordBatch, FlameError> {
 // Helper function to extract data from RecordBatch
 // Note: Returns Object with empty deltas; caller populates deltas separately
 fn batch_to_object(batch: &RecordBatch) -> Result<Object, FlameError> {
-    if batch.num_rows() != 1 {
+    if batch.num_rows() == 0 {
         return Err(FlameError::InvalidState(
-            "Expected exactly one row".to_string(),
+            "Expected at least one row".to_string(),
         ));
     }
 
@@ -894,7 +894,10 @@ fn batch_to_object(batch: &RecordBatch) -> Result<Object, FlameError> {
         .ok_or_else(|| FlameError::Internal("Invalid data column".to_string()))?;
 
     let version = version_col.value(0);
-    let data = data_col.value(0).to_vec();
+    let mut data = Vec::new();
+    for row in 0..batch.num_rows() {
+        data.extend_from_slice(data_col.value(row));
+    }
 
     Ok(Object::new(version, data))
 }
@@ -1621,6 +1624,22 @@ mod tests {
         }
 
         #[test]
+        fn batch_to_object_concatenates_chunk_rows() {
+            let schema = get_object_schema();
+            let version_array = UInt64Array::from(vec![0, 0, 0]);
+            let data_array = BinaryArray::from(vec![b"abc".as_slice(), b"def".as_slice(), b"ghi"]);
+            let batch = RecordBatch::try_new(
+                Arc::new(schema),
+                vec![Arc::new(version_array), Arc::new(data_array)],
+            )
+            .unwrap();
+
+            let recovered = batch_to_object(&batch).unwrap();
+            assert_eq!(recovered.version, 0);
+            assert_eq!(recovered.data, b"abcdefghi");
+        }
+
+        #[test]
         fn get_object_schema_returns_correct_schema() {
             let schema = get_object_schema();
             assert_eq!(schema.fields().len(), 2);
@@ -2117,6 +2136,226 @@ mod tests {
             let schema = get_object_schema();
             let encoded = encode_schema(&schema).unwrap();
             assert!(!encoded.is_empty());
+        }
+    }
+
+    mod flame_rs_object_helpers_integration {
+        use super::*;
+        use arrow_flight::flight_service_server::FlightServiceServer;
+        use flame_rs as flame;
+        use flame_rs::FlameMessage;
+        use serde_derive::{Deserialize, Serialize};
+        use tokio::net::TcpListener;
+        use tokio::task::JoinHandle;
+        use tokio_stream::wrappers::TcpListenerStream;
+
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        struct TestObject {
+            value: String,
+            count: u32,
+        }
+
+        impl FlameMessage for TestObject {
+            fn encode(&self) -> Result<Bytes, flame::apis::FlameError> {
+                serde_json::to_vec(self)
+                    .map(Bytes::from)
+                    .map_err(|e| flame::apis::FlameError::Internal(e.to_string()))
+            }
+
+            fn decode(bytes: &[u8]) -> Result<Self, flame::apis::FlameError> {
+                serde_json::from_slice(bytes)
+                    .map_err(|e| flame::apis::FlameError::InvalidConfig(e.to_string()))
+            }
+        }
+
+        #[derive(Debug, Clone, PartialEq)]
+        struct TestBytes(Vec<u8>);
+
+        impl FlameMessage for TestBytes {
+            fn encode(&self) -> Result<Bytes, flame::apis::FlameError> {
+                Ok(Bytes::from(self.0.clone()))
+            }
+
+            fn decode(bytes: &[u8]) -> Result<Self, flame::apis::FlameError> {
+                Ok(Self(bytes.to_vec()))
+            }
+        }
+
+        struct TestCacheServer {
+            endpoint: String,
+            handle: JoinHandle<()>,
+        }
+
+        impl Drop for TestCacheServer {
+            fn drop(&mut self) {
+                self.handle.abort();
+            }
+        }
+
+        async fn start_test_cache_server() -> TestCacheServer {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let endpoint = CacheEndpoint {
+                scheme: "grpc".to_string(),
+                host: "127.0.0.1".to_string(),
+                port: addr.port(),
+            };
+            let storage = Box::new(crate::storage::NoneStorage::new());
+            let cache = Arc::new(ObjectCache::new(endpoint, storage, None).unwrap());
+            let server = FlightCacheServer::new(cache);
+            let incoming = TcpListenerStream::new(listener);
+
+            let handle = tokio::spawn(async move {
+                tonic::transport::Server::builder()
+                    .add_service(
+                        FlightServiceServer::new(server)
+                            .max_decoding_message_size(usize::MAX)
+                            .max_encoding_message_size(usize::MAX),
+                    )
+                    .serve_with_incoming(incoming)
+                    .await
+                    .unwrap();
+            });
+
+            TestCacheServer {
+                endpoint: format!("grpc://127.0.0.1:{}", addr.port()),
+                handle,
+            }
+        }
+
+        fn flame_context(endpoint: &str) -> flame::apis::FlameContext {
+            flame::apis::FlameContext {
+                current_context: "test".to_string(),
+                contexts: vec![flame::apis::FlameContextEntry {
+                    name: "test".to_string(),
+                    cluster: flame::apis::FlameClusterConfig {
+                        endpoint: "http://127.0.0.1:0".to_string(),
+                        tls: None,
+                    },
+                    cache: Some(flame::apis::FlameClientCache {
+                        endpoint: Some(endpoint.to_string()),
+                        tls: None,
+                        storage: None,
+                    }),
+                    package: None,
+                    runner: None,
+                }],
+            }
+        }
+
+        #[tokio::test]
+        async fn flame_rs_put_get_update_patch_round_trips_over_flight() {
+            let server = start_test_cache_server().await;
+            let context = flame_context(&server.endpoint);
+
+            let initial = TestObject {
+                value: "initial".to_string(),
+                count: 1,
+            };
+            let reference =
+                flame::object::put_object_with_context(&context, "rust-sdk/session", &initial)
+                    .await
+                    .unwrap();
+            assert_eq!(reference.endpoint, server.endpoint);
+            assert!(reference.key.starts_with("rust-sdk/session/"));
+            assert_eq!(reference.version, 1);
+
+            let fetched: TestObject = flame::get_object(reference.clone()).await.unwrap();
+            assert_eq!(fetched, initial);
+
+            let updated = TestObject {
+                value: "updated".to_string(),
+                count: 2,
+            };
+            let updated_ref = flame::update_object(&reference, &updated).await.unwrap();
+            assert_eq!(updated_ref.key, reference.key);
+            assert_eq!(updated_ref.version, 2);
+            let fetched_updated: TestObject = flame::get_object(updated_ref.clone()).await.unwrap();
+            assert_eq!(fetched_updated, updated);
+
+            let delta = TestObject {
+                value: "delta".to_string(),
+                count: 3,
+            };
+            let patched_ref = flame::patch_object(&updated_ref, &delta).await.unwrap();
+            assert_eq!(patched_ref.key, reference.key);
+            assert_eq!(patched_ref.version, 3);
+
+            // Rust typed get_object returns the base object. Patch rows are reserved for
+            // callers that add a future merge/deserializer API.
+            let fetched_after_patch: TestObject =
+                flame::get_object(patched_ref.clone()).await.unwrap();
+            assert_eq!(fetched_after_patch, updated);
+        }
+
+        #[tokio::test]
+        async fn flame_rs_upload_download_object_round_trips_file_over_flight() {
+            let server = start_test_cache_server().await;
+            let context = flame_context(&server.endpoint);
+            let temp = tempfile::TempDir::new().unwrap();
+            let source_path = temp.path().join("package.tar.gz");
+            let downloaded_path = temp.path().join("downloaded.tar.gz");
+            let package_bytes: Vec<u8> = (0..(5 * 1024 * 1024 + 123))
+                .map(|idx| (idx % 251) as u8)
+                .collect();
+            tokio::fs::write(&source_path, &package_bytes)
+                .await
+                .unwrap();
+
+            let reference = flame::object::upload_object_with_context(
+                &context,
+                "rust-sdk/pkg/package.tar.gz",
+                &source_path,
+            )
+            .await
+            .unwrap();
+            assert_eq!(reference.endpoint, server.endpoint);
+            assert_eq!(reference.key, "rust-sdk/pkg/package.tar.gz");
+            assert_eq!(reference.version, 1);
+
+            flame::download_object(&reference, &downloaded_path)
+                .await
+                .unwrap();
+            let downloaded = tokio::fs::read(&downloaded_path).await.unwrap();
+            assert_eq!(downloaded, package_bytes);
+
+            let fetched: TestBytes = flame::get_object(reference.clone()).await.unwrap();
+            assert_eq!(fetched.0, package_bytes);
+        }
+
+        #[tokio::test]
+        async fn flame_rs_download_object_rejects_patched_file_ref() {
+            let server = start_test_cache_server().await;
+            let context = flame_context(&server.endpoint);
+            let temp = tempfile::TempDir::new().unwrap();
+            let source_path = temp.path().join("package.tar.gz");
+            let downloaded_path = temp.path().join("downloaded.tar.gz");
+            tokio::fs::write(&source_path, b"base-package")
+                .await
+                .unwrap();
+
+            let reference = flame::object::upload_object_with_context(
+                &context,
+                "rust-sdk/pkg/patched-package.tar.gz",
+                &source_path,
+            )
+            .await
+            .unwrap();
+            let patched_ref = flame::patch_object(
+                &reference,
+                &TestObject {
+                    value: "delta".to_string(),
+                    count: 4,
+                },
+            )
+            .await
+            .unwrap();
+
+            let err = flame::download_object(&patched_ref, &downloaded_path)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("contains patch rows"));
+            assert!(!downloaded_path.exists());
         }
     }
 }

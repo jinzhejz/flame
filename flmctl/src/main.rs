@@ -21,6 +21,7 @@ use flame_rs::apis::FlameContext;
 mod apis;
 mod close;
 mod create;
+mod deploy;
 mod helper;
 mod list;
 mod migrate;
@@ -127,6 +128,8 @@ enum Commands {
         #[arg(short, long)]
         file: String,
     },
+    /// Deploy an application package to object cache and register it
+    Deploy(Box<deploy::Options>),
     /// Unregister the application from Flame
     Unregister {
         /// The name of the application
@@ -171,6 +174,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }) => view::run(&ctx, output_format, application, session, task, node).await?,
         Some(Commands::Migrate { url, sql }) => migrate::run(&ctx, url, sql).await?,
         Some(Commands::Register { file }) => register::run(&ctx, file).await?,
+        Some(Commands::Deploy(options)) => deploy::run(&ctx, options).await?,
         Some(Commands::Unregister { application }) => unregister::run(&ctx, application).await?,
         Some(Commands::Update { application }) => update::run(&ctx, application).await?,
         Some(Commands::Completion { shell }) => {

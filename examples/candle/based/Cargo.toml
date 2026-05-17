@@ -1,0 +1,28 @@
+[package]
+name = "candle-based-example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flame-rs = { path = "../../../sdk/rust", features = ["macros"] }
+
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_derive = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+
+candle = { package = "candle-core", version = "0.10.2" }
+candle-nn = "0.10.2"
+candle-transformers = "0.10.2"
+hf-hub = { version = "0.4.1", features = ["tokio"] }
+tokenizers = { version = "0.22.0", default-features = false, features = ["onig"] }
+
+[[bin]]
+name = "candle-based-example-service"
+path = "src/service.rs"
+
+[[bin]]
+name = "candle-based-example"
+path = "src/client.rs"

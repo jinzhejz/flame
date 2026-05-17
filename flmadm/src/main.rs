@@ -64,6 +64,10 @@ enum Commands {
         #[arg(long)]
         all: bool,
 
+        /// Install all example binaries under FLAME_HOME/examples.
+        #[arg(long)]
+        with_examples: bool,
+
         /// Skip systemd service generation
         #[arg(long)]
         no_systemd: bool,
@@ -152,6 +156,7 @@ fn main() {
             cache,
             client,
             all,
+            with_examples,
             no_systemd,
             enable,
             skip_build,
@@ -222,6 +227,7 @@ fn main() {
                 profiles,
                 force_overwrite: force,
                 python_version,
+                with_examples,
             };
             commands::install::run(config)
         }
