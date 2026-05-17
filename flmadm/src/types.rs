@@ -46,6 +46,7 @@ pub struct InstallConfig {
     pub profiles: Vec<InstallProfile>,
     pub force_overwrite: bool,
     pub python_version: String,
+    pub with_examples: bool,
 }
 
 impl Default for InstallConfig {
@@ -66,8 +67,40 @@ impl Default for InstallConfig {
             ],
             force_overwrite: false,
             python_version: DEFAULT_PYTHON_VERSION.to_string(),
+            with_examples: false,
         }
     }
+}
+
+/// A buildable example whose release binaries can be installed by flmadm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExampleSpec {
+    pub name: &'static str,
+    pub package: &'static str,
+    pub relative_dir: &'static str,
+    pub binaries: &'static [&'static str],
+    pub assets: &'static [&'static str],
+}
+
+const EXAMPLES: &[ExampleSpec] = &[
+    ExampleSpec {
+        name: "pi/rust",
+        package: "pi",
+        relative_dir: "pi/rust",
+        binaries: &["pi", "pi-service"],
+        assets: &["README.md"],
+    },
+    ExampleSpec {
+        name: "candle/based",
+        package: "candle-based-example",
+        relative_dir: "candle/based",
+        binaries: &["candle-based-example", "candle-based-example-service"],
+        assets: &["candle-based-example.yaml", "README.md"],
+    },
+];
+
+pub fn available_examples() -> &'static [ExampleSpec] {
+    EXAMPLES
 }
 
 /// Configuration for the uninstall command
@@ -103,6 +136,7 @@ pub struct InstallationPaths {
     pub bin: PathBuf,
     pub sbin: PathBuf,
     pub lib: PathBuf,
+    pub examples: PathBuf,
     pub wheels: PathBuf,
     pub work: PathBuf,
     pub logs: PathBuf,
@@ -118,6 +152,7 @@ impl InstallationPaths {
             bin: prefix.join("bin"),
             sbin: prefix.join("sbin"),
             lib: prefix.join("lib"),
+            examples: prefix.join("examples"),
             wheels: prefix.join("wheels"),
             work: prefix.join("work"),
             logs: prefix.join("logs"),
@@ -281,6 +316,7 @@ mod tests {
             assert!(!config.verbose);
             assert!(!config.force_overwrite);
             assert!(config.src_dir.is_none());
+            assert!(!config.with_examples);
         }
 
         #[test]
@@ -326,6 +362,7 @@ mod tests {
             assert_eq!(paths.bin, prefix.join("bin"));
             assert_eq!(paths.sbin, prefix.join("sbin"));
             assert_eq!(paths.lib, prefix.join("lib"));
+            assert_eq!(paths.examples, prefix.join("examples"));
             assert_eq!(paths.wheels, prefix.join("wheels"));
             assert_eq!(paths.work, prefix.join("work"));
             assert_eq!(paths.logs, prefix.join("logs"));
@@ -393,6 +430,30 @@ mod tests {
         fn exit_codes() {
             assert_eq!(exit_codes::SUCCESS, 0);
             assert_eq!(exit_codes::INSTALL_FAILURE, 3);
+        }
+    }
+
+    mod examples {
+        use super::*;
+
+        #[test]
+        fn lists_supported_examples() {
+            let examples = available_examples();
+
+            let candle = examples
+                .iter()
+                .find(|example| example.name == "candle/based")
+                .expect("candle based example should be supported");
+            assert_eq!(
+                candle.binaries,
+                &["candle-based-example", "candle-based-example-service"]
+            );
+
+            let pi = examples
+                .iter()
+                .find(|example| example.name == "pi/rust")
+                .expect("pi rust example should be supported");
+            assert_eq!(pi.assets, &["README.md"]);
         }
     }
 }

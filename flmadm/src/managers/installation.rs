@@ -1,4 +1,4 @@
-use crate::types::{BuildArtifacts, InstallProfile, InstallationPaths};
+use crate::types::{available_examples, BuildArtifacts, InstallProfile, InstallationPaths};
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::{self, Write};
@@ -20,6 +20,7 @@ impl InstallationManager {
             ("bin", &paths.bin),
             ("sbin", &paths.sbin),
             // Note: sdk/python is created by install_python_sdk() to allow existence check
+            ("examples", &paths.examples),
             ("work", &paths.work),
             ("work/sessions", &paths.work.join("sessions")),
             ("work/executors", &paths.work.join("executors")),
@@ -44,6 +45,94 @@ impl InstallationManager {
             "✓ Created directory structure at: {}",
             paths.prefix.display()
         );
+        Ok(())
+    }
+
+    /// Install example binaries under FLAME_HOME/examples when requested.
+    pub fn install_examples(
+        &self,
+        src_dir: &Path,
+        paths: &InstallationPaths,
+        with_examples: bool,
+        force_overwrite: bool,
+    ) -> Result<()> {
+        if !with_examples {
+            println!("⊘ Skipped examples (--with-examples not specified)");
+            return Ok(());
+        }
+
+        println!("🧪 Installing examples...");
+        let target_dir = src_dir.join("target").join("release");
+
+        for example in available_examples() {
+            let dst_dir = paths.examples.join(example.relative_dir);
+            fs::create_dir_all(&dst_dir).context(format!(
+                "Failed to create example directory: {}",
+                dst_dir.display()
+            ))?;
+
+            println!("  • {}", example.name);
+            for binary in example.binaries {
+                let src = target_dir.join(binary);
+                if !src.exists() {
+                    anyhow::bail!(
+                        "Example binary not found: {}. Build package '{}' first or run without --skip-build.",
+                        src.display(),
+                        example.package
+                    );
+                }
+
+                let dst = dst_dir.join(binary);
+                if dst.exists() && !force_overwrite && !self.prompt_overwrite(binary)? {
+                    println!("    ⊘ Skipped {} (already exists)", binary);
+                    continue;
+                }
+
+                fs::copy(&src, &dst)
+                    .context(format!("Failed to copy example binary {}", binary))?;
+
+                let perms = fs::Permissions::from_mode(0o755);
+                fs::set_permissions(&dst, perms)
+                    .context(format!("Failed to set permissions on {}", binary))?;
+
+                println!(
+                    "    ✓ Installed {} to {}",
+                    binary,
+                    dst.strip_prefix(&paths.prefix).unwrap_or(&dst).display()
+                );
+            }
+
+            let src_example_dir = src_dir.join("examples").join(example.relative_dir);
+            for asset in example.assets {
+                let src = src_example_dir.join(asset);
+                if !src.exists() {
+                    anyhow::bail!(
+                        "Example asset not found: {} for example '{}'.",
+                        src.display(),
+                        example.name
+                    );
+                }
+
+                let dst = dst_dir.join(asset);
+                if dst.exists() && !force_overwrite && !self.prompt_overwrite(asset)? {
+                    println!("    ⊘ Skipped {} (already exists)", asset);
+                    continue;
+                }
+
+                fs::copy(&src, &dst).context(format!("Failed to copy example asset {}", asset))?;
+                let mode = if asset.ends_with(".sh") { 0o755 } else { 0o644 };
+                let perms = fs::Permissions::from_mode(mode);
+                fs::set_permissions(&dst, perms)
+                    .context(format!("Failed to set permissions on {}", asset))?;
+
+                println!(
+                    "    ✓ Installed {} to {}",
+                    asset,
+                    dst.strip_prefix(&paths.prefix).unwrap_or(&dst).display()
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -471,6 +560,11 @@ fi
             println!("  ✓ Removed Python libs");
         }
 
+        if paths.examples.exists() {
+            fs::remove_dir_all(&paths.examples).context("Failed to remove examples directory")?;
+            println!("  ✓ Removed examples");
+        }
+
         if paths.wheels.exists() {
             fs::remove_dir_all(&paths.wheels).context("Failed to remove wheels directory")?;
             println!("  ✓ Removed wheels");
@@ -626,6 +720,7 @@ mod tests {
             manager.create_directories(&paths).unwrap();
 
             assert!(paths.bin.exists());
+            assert!(paths.examples.exists());
             assert!(paths.work.exists());
             assert!(paths.work.join("sessions").exists());
             assert!(paths.work.join("executors").exists());
@@ -663,6 +758,103 @@ mod tests {
         }
     }
 
+    mod install_examples {
+        use super::*;
+
+        fn create_example_fixtures(src_dir: &Path) {
+            let target_dir = src_dir.join("target/release");
+            fs::create_dir_all(&target_dir).unwrap();
+            fs::write(target_dir.join("pi"), "client").unwrap();
+            fs::write(target_dir.join("pi-service"), "service").unwrap();
+            fs::write(target_dir.join("candle-based-example"), "client").unwrap();
+            fs::write(target_dir.join("candle-based-example-service"), "service").unwrap();
+
+            let pi_dir = src_dir.join("examples/pi/rust");
+            fs::create_dir_all(&pi_dir).unwrap();
+            fs::write(pi_dir.join("README.md"), "readme").unwrap();
+
+            let example_dir = src_dir.join("examples/candle/based");
+            fs::create_dir_all(&example_dir).unwrap();
+            fs::write(
+                example_dir.join("candle-based-example.yaml"),
+                "metadata: {}\n",
+            )
+            .unwrap();
+            fs::write(example_dir.join("README.md"), "readme").unwrap();
+        }
+
+        #[test]
+        fn copies_all_example_binaries_to_examples_dir() {
+            let temp = tempdir().unwrap();
+            let src_dir = temp.path().join("src");
+            create_example_fixtures(&src_dir);
+
+            let paths = InstallationPaths::new(temp.path().join("flame"));
+            let manager = InstallationManager::new();
+            manager.create_directories(&paths).unwrap();
+            manager
+                .install_examples(&src_dir, &paths, true, true)
+                .unwrap();
+
+            assert!(paths.examples.join("pi/rust/pi").exists());
+            assert!(paths.examples.join("pi/rust/pi-service").exists());
+            assert!(paths.examples.join("pi/rust/README.md").exists());
+            assert!(!paths.examples.join("pi/rust/deploy.sh").exists());
+
+            assert!(paths
+                .examples
+                .join("candle/based/candle-based-example")
+                .exists());
+            assert!(paths
+                .examples
+                .join("candle/based/candle-based-example-service")
+                .exists());
+            assert!(paths
+                .examples
+                .join("candle/based/candle-based-example.yaml")
+                .exists());
+            assert!(paths.examples.join("candle/based/README.md").exists());
+            assert!(!paths.bin.join("candle-based-example").exists());
+            assert!(!paths.bin.join("pi").exists());
+        }
+
+        #[test]
+        fn reports_missing_example_binary() {
+            let temp = tempdir().unwrap();
+            let src_dir = temp.path().join("src");
+            fs::create_dir_all(src_dir.join("target/release")).unwrap();
+            let paths = InstallationPaths::new(temp.path().join("flame"));
+            let manager = InstallationManager::new();
+            manager.create_directories(&paths).unwrap();
+
+            let error = manager
+                .install_examples(&src_dir, &paths, true, true)
+                .unwrap_err();
+
+            assert!(error.to_string().contains("Example binary not found"));
+        }
+
+        #[test]
+        fn skips_examples_when_flag_is_false() {
+            let temp = tempdir().unwrap();
+            let src_dir = temp.path().join("src");
+            create_example_fixtures(&src_dir);
+
+            let paths = InstallationPaths::new(temp.path().join("flame"));
+            let manager = InstallationManager::new();
+            manager.create_directories(&paths).unwrap();
+            manager
+                .install_examples(&src_dir, &paths, false, true)
+                .unwrap();
+
+            assert!(!paths.examples.join("pi/rust/pi").exists());
+            assert!(!paths
+                .examples
+                .join("candle/based/candle-based-example")
+                .exists());
+        }
+    }
+
     mod remove_installation {
         use super::*;
 
@@ -672,6 +864,8 @@ mod tests {
             let paths = InstallationPaths::new(temp.path().to_path_buf());
             fs::create_dir_all(&paths.bin).unwrap();
             fs::write(paths.bin.join("test"), "test").unwrap();
+            fs::create_dir_all(&paths.examples).unwrap();
+            fs::write(paths.examples.join("example"), "test").unwrap();
 
             let manager = InstallationManager::new();
             manager
@@ -679,6 +873,7 @@ mod tests {
                 .unwrap();
 
             assert!(!paths.bin.exists());
+            assert!(!paths.examples.exists());
         }
 
         #[test]

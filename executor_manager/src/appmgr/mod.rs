@@ -11,10 +11,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+mod binary;
 mod downloader;
 mod installer;
 mod python;
 
+pub use binary::BinaryInstaller;
 pub use downloader::{DownloaderRegistry, PackageDownloader};
 pub use installer::{Installer, InstallerType};
 pub use python::PythonInstaller;
@@ -22,11 +24,13 @@ pub use python::PythonInstaller;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
+use sha2::{Digest, Sha256};
 use stdng::{lock_ptr, MutexPtr};
 use tar::Archive;
 use tokio::sync::RwLock;
@@ -34,6 +38,66 @@ use tonic::transport::ClientTlsConfig;
 
 use common::apis::ApplicationContext;
 use common::FlameError;
+
+#[derive(Clone, Debug, Eq)]
+struct InstallKey {
+    app_name: String,
+    installer: String,
+    url: Option<String>,
+}
+
+impl InstallKey {
+    fn new(app_name: &str, installer: &InstallerType, url: Option<&String>) -> Self {
+        Self {
+            app_name: app_name.to_string(),
+            installer: installer.to_string(),
+            url: url.cloned(),
+        }
+    }
+
+    fn release_id(&self) -> String {
+        let mut hasher = Sha256::new();
+        update_release_hash(&mut hasher, "app", Some(&self.app_name));
+        update_release_hash(&mut hasher, "installer", Some(&self.installer));
+        update_release_hash(&mut hasher, "url", self.url.as_deref());
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
+
+fn update_release_hash(hasher: &mut Sha256, label: &str, value: Option<&str>) {
+    hasher.update(label.as_bytes());
+    hasher.update([0]);
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hasher.update(value.len().to_be_bytes());
+            hasher.update(value.as_bytes());
+        }
+        None => {
+            hasher.update([0]);
+        }
+    }
+}
+
+impl PartialEq for InstallKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.app_name == other.app_name
+            && self.installer == other.installer
+            && self.url == other.url
+    }
+}
+
+impl Hash for InstallKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.app_name.hash(state);
+        self.installer.hash(state);
+        self.url.hash(state);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum InstallState {
@@ -66,7 +130,7 @@ impl AppInstaller {
 }
 
 pub struct ApplicationManager {
-    apps: MutexPtr<HashMap<String, Arc<RwLock<AppInstaller>>>>,
+    apps: MutexPtr<HashMap<InstallKey, Arc<RwLock<AppInstaller>>>>,
     flame_home: PathBuf,
     downloader: DownloaderRegistry,
 }
@@ -99,11 +163,12 @@ impl ApplicationManager {
             }
             Some(installer_str) => installer_str.parse::<InstallerType>()?,
         };
+        let install_key = InstallKey::new(&app.name, &installer_type, app.url.as_ref());
 
         {
             let app_entry = {
                 let apps = lock_ptr!(self.apps)?;
-                apps.get(&app.name).cloned()
+                apps.get(&install_key).cloned()
             };
             if let Some(installed) = app_entry {
                 let installed = installed.read().await;
@@ -115,7 +180,7 @@ impl ApplicationManager {
 
         let app_entry = {
             let mut apps = lock_ptr!(self.apps)?;
-            apps.entry(app.name.clone())
+            apps.entry(install_key.clone())
                 .or_insert_with(|| {
                     Arc::new(RwLock::new(AppInstaller::new(
                         &app.name,
@@ -153,13 +218,15 @@ impl ApplicationManager {
             Some(url) => url,
         };
 
-        let package_path = self.download_package(url, &app.name).await?;
-
-        let src_path = self
+        let release_path = self
             .flame_home
             .join("data/apps")
             .join(&app.name)
-            .join("src");
+            .join("releases")
+            .join(install_key.release_id());
+        let package_path = self.download_package(url, &release_path).await?;
+
+        let src_path = release_path.join("src");
         self.extract_package(&package_path, &src_path)?;
 
         let installer = installer_type.create_installer();
@@ -190,9 +257,13 @@ impl ApplicationManager {
 
     pub fn is_installed(&self, app_name: &str) -> bool {
         if let Ok(apps) = lock_ptr!(self.apps) {
-            if let Some(installed) = apps.get(app_name) {
-                if let Ok(installed) = installed.try_read() {
-                    return installed.state == InstallState::Installed;
+            for (key, installed) in apps.iter() {
+                if key.app_name == app_name {
+                    if let Ok(installed) = installed.try_read() {
+                        if installed.state == InstallState::Installed {
+                            return true;
+                        }
+                    }
                 }
             }
         }
@@ -269,12 +340,12 @@ impl ApplicationManager {
         paths.into_iter().collect()
     }
 
-    async fn download_package(&self, url: &str, app_name: &str) -> Result<PathBuf, FlameError> {
-        let download_dir = self
-            .flame_home
-            .join("data/apps")
-            .join(app_name)
-            .join("download");
+    async fn download_package(
+        &self,
+        url: &str,
+        release_path: &Path,
+    ) -> Result<PathBuf, FlameError> {
+        let download_dir = release_path.join("download");
         fs::create_dir_all(&download_dir).map_err(|e| {
             FlameError::Internal(format!("failed to create download directory: {}", e))
         })?;
@@ -357,5 +428,37 @@ impl ApplicationManager {
 impl Default for ApplicationManager {
     fn default() -> Self {
         Self::new().expect("failed to create ApplicationManager")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_id_is_stable_sha256() {
+        let key = InstallKey::new(
+            "demo",
+            &InstallerType::Binary,
+            Some(&"grpc://cache/demo/pkg/demo.tar.gz".to_string()),
+        );
+
+        assert_eq!(
+            key.release_id(),
+            "e39adc06cdb2124e255005866affce6fb279d816c4549a6a6a8c9dc03ac4674a"
+        );
+    }
+
+    #[test]
+    fn release_id_distinguishes_missing_url() {
+        let with_url = InstallKey::new(
+            "demo",
+            &InstallerType::Binary,
+            Some(&"grpc://cache/demo/pkg/demo.tar.gz".to_string()),
+        );
+        let without_url = InstallKey::new("demo", &InstallerType::Binary, None);
+
+        assert_ne!(with_url.release_id(), without_url.release_id());
+        assert_eq!(without_url.release_id().len(), 64);
     }
 }

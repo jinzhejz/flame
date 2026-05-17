@@ -12,6 +12,7 @@ members = [
     "sdk/rust",
     "sdk/rust/macros",
     "examples/pi/rust",
+    "examples/candle/based",
     "cri",
     "stdng",
     "object_cache",

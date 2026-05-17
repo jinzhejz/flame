@@ -20,6 +20,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use common::FlameError;
 
+use super::binary::BinaryInstaller;
 use super::python::PythonInstaller;
 
 /// Installer trait - implemented by each installer type.
@@ -54,15 +55,17 @@ pub trait Installer: Send + Sync {
 /// Supported installer types.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InstallerType {
+    /// Binary package installer for self-contained executables
+    Binary,
     /// Python package installer using uv
     Python,
-    // Future: Node, Rust, etc.
 }
 
 impl InstallerType {
     /// Create the corresponding Installer implementation.
     pub fn create_installer(&self) -> Box<dyn Installer> {
         match self {
+            InstallerType::Binary => Box::new(BinaryInstaller::new()),
             InstallerType::Python => Box::new(PythonInstaller::new()),
         }
     }
@@ -73,9 +76,10 @@ impl FromStr for InstallerType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "binary" => Ok(InstallerType::Binary),
             "python" => Ok(InstallerType::Python),
             _ => Err(FlameError::InvalidConfig(format!(
-                "Unknown installer type: {}. Supported types: python",
+                "Unknown installer type: {}. Supported types: binary, python",
                 s
             ))),
         }
@@ -85,6 +89,7 @@ impl FromStr for InstallerType {
 impl std::fmt::Display for InstallerType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InstallerType::Binary => write!(f, "binary"),
             InstallerType::Python => write!(f, "python"),
         }
     }
@@ -96,6 +101,14 @@ mod tests {
 
     #[test]
     fn test_installer_type_from_str() {
+        assert_eq!(
+            "binary".parse::<InstallerType>().unwrap(),
+            InstallerType::Binary
+        );
+        assert_eq!(
+            "Binary".parse::<InstallerType>().unwrap(),
+            InstallerType::Binary
+        );
         assert_eq!(
             "python".parse::<InstallerType>().unwrap(),
             InstallerType::Python
@@ -113,6 +126,7 @@ mod tests {
 
     #[test]
     fn test_installer_type_display() {
+        assert_eq!(InstallerType::Binary.to_string(), "binary");
         assert_eq!(InstallerType::Python.to_string(), "python");
     }
 }

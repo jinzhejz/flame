@@ -11,59 +11,36 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-mod util;
+mod api;
 
 use rand::distr::{Distribution, Uniform};
 
-use flame_rs::{
-    self as flame,
-    apis::{FlameError, TaskInput, TaskOutput},
-    service::{SessionContext, TaskContext},
-};
+use flame_rs::{self as flame, apis::FlameError};
 
-#[derive(Clone)]
-pub struct PiService {}
+use api::{PiRequest, PiResponse};
 
-#[tonic::async_trait]
-impl flame::service::FlameService for PiService {
-    async fn on_session_enter(&self, _: SessionContext) -> Result<(), FlameError> {
-        Ok(())
-    }
+#[flame::entrypoint]
+async fn estimate_pi(input: PiRequest) -> Result<PiResponse, FlameError> {
+    let mut rng = rand::rng();
+    let die = Uniform::try_from(0.0..1.0).unwrap();
+    let mut inside = 0u32;
 
-    async fn on_task_invoke(&self, ctx: TaskContext) -> Result<Option<TaskOutput>, FlameError> {
-        let mut rng = rand::rng();
-        let die = Uniform::try_from(0.0..1.0).unwrap();
+    for _ in 0..input.samples {
+        let x: f64 = die.sample(&mut rng);
+        let y: f64 = die.sample(&mut rng);
+        let dist = (x * x + y * y).sqrt();
 
-        let input = ctx
-            .input
-            .clone()
-            .unwrap_or(TaskInput::from(util::zero_u32()));
-        let total = util::bytes_to_u32(input.to_vec())?;
-        let mut sum = 0u32;
-
-        for _ in 0..total {
-            let x: f64 = die.sample(&mut rng);
-            let y: f64 = die.sample(&mut rng);
-            let dist = (x * x + y * y).sqrt();
-
-            if dist <= 1.0 {
-                sum += 1;
-            }
+        if dist <= 1.0 {
+            inside += 1;
         }
-
-        Ok(Some(TaskOutput::from(util::u32_to_bytes(sum))))
     }
 
-    async fn on_session_leave(&self) -> Result<(), FlameError> {
-        Ok(())
-    }
+    Ok(PiResponse { inside })
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    flame::apis::init_logger()?;
-
-    flame::service::run(PiService {}).await?;
+    flame::run(estimate_pi).await?;
 
     tracing::debug!("PiService was stopped.");
 

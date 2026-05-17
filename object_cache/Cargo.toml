@@ -36,5 +36,7 @@ bson = "2"
 rayon = { workspace = true }
 
 [dev-dependencies]
+flame-rs = { path = "../sdk/rust" }
 tempfile = "3"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio-stream = { workspace = true, features = ["net"] }

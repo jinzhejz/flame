@@ -4,14 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-flame-rs = { path = "../../../sdk/rust" }
-stdng = { path = "../../../stdng" }
+flame-rs = { path = "../../../sdk/rust", features = ["macros"] }
 
 tokio = { workspace = true }
-tonic = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-rand_distr = "*"
+serde = { workspace = true }
+serde_derive = { workspace = true }
 rand = { workspace = true }
 futures = { workspace = true }
 clap = { workspace = true }

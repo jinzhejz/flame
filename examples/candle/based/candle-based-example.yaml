@@ -1,0 +1,4 @@
+metadata:
+  name: candle-based-example
+spec:
+  command: /usr/local/flame/examples/candle/based/candle-based-example-service

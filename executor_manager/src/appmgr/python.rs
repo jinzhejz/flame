@@ -87,8 +87,12 @@ impl Installer for PythonInstaller {
         flame_home: &Path,
         app_environments: &HashMap<String, String>,
     ) -> Result<HashMap<String, String>, FlameError> {
-        let app_data_path = flame_home.join("data/apps").join(app_name);
+        let app_data_path = src_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| flame_home.join("data/apps").join(app_name));
         let deps_path = app_data_path.join("deps");
+        let deps_bin_path = deps_path.join("bin");
         let uv_cache_path = flame_home.join("data/cache/uv");
         let pip_cache_path = flame_home.join("data/cache/pip");
         let log_path = flame_home
@@ -177,6 +181,17 @@ impl Installer for PythonInstaller {
         }
         if !ld_paths.is_empty() {
             env_vars.insert("LD_LIBRARY_PATH".to_string(), ld_paths.join(":"));
+        }
+
+        if deps_bin_path.exists() {
+            let mut paths = vec![deps_bin_path.to_string_lossy().to_string()];
+            if let Some(app_path) = app_environments.get("PATH") {
+                paths.push(app_path.clone());
+            }
+            if let Ok(current_path) = std::env::var("PATH") {
+                paths.push(current_path);
+            }
+            env_vars.insert("PATH".to_string(), paths.join(":"));
         }
 
         env_vars.insert(

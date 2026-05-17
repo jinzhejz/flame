@@ -3,7 +3,7 @@ use crate::managers::{
     installation::InstallationManager, source::SourceManager, systemd::SystemdManager,
     user::UserManager,
 };
-use crate::types::{InstallConfig, InstallationPaths};
+use crate::types::{available_examples, InstallConfig, InstallationPaths};
 use anyhow::Result;
 
 pub fn run(config: InstallConfig) -> Result<()> {
@@ -18,6 +18,12 @@ pub fn run(config: InstallConfig) -> Result<()> {
             crate::types::InstallProfile::Client => "Client",
         };
         println!("     • {}", profile_name);
+    }
+    if config.with_examples {
+        println!("   Examples:");
+        for example in available_examples() {
+            println!("     • {}", example.name);
+        }
     }
     println!();
 
@@ -224,6 +230,14 @@ fn install_components(
     let installation_manager = InstallationManager::new();
     installation_manager.create_directories(paths)?;
 
+    // Install examples first so missing example artifacts fail before core binaries are copied.
+    installation_manager.install_examples(
+        src_dir,
+        paths,
+        config.with_examples,
+        config.force_overwrite,
+    )?;
+
     // Install binaries
     installation_manager.install_binaries(
         artifacts,
@@ -322,6 +336,9 @@ fn print_summary(paths: &InstallationPaths, config: &InstallConfig) {
         .any(|p| p.includes_component("flamepy"));
     if has_flamepy {
         println!("  • Python libs: {}", paths.lib.display());
+    }
+    if config.with_examples {
+        println!("  • Examples: {}", paths.examples.display());
     }
     println!();
 
