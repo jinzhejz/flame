@@ -49,13 +49,9 @@ pub fn format_resreq(r: &Option<ResourceRequirement>) -> String {
 
 /// Formats a duration as compact CLI output such as `45s` or `1h 5m`.
 pub fn format_duration(duration: Duration) -> String {
-    let mut seconds = duration.num_seconds();
-    let sign = if seconds < 0 {
-        seconds = seconds.saturating_abs();
-        "-"
-    } else {
-        ""
-    };
+    let seconds_raw = duration.num_seconds();
+    let sign = if seconds_raw < 0 { "-" } else { "" };
+    let mut seconds = seconds_raw.unsigned_abs();
 
     let days = seconds / 86_400;
     seconds %= 86_400;
@@ -79,6 +75,14 @@ pub fn format_duration(duration: Duration) -> String {
     }
 
     format!("{sign}{}", parts.join(" "))
+}
+
+/// Formats an optional duration, using `-` for unset values.
+pub fn format_optional_duration(duration: &Option<Duration>) -> String {
+    match duration {
+        Some(duration) => format_duration(*duration),
+        None => "-".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -131,5 +135,15 @@ mod tests {
     #[test]
     fn format_duration_negative() {
         assert_eq!(format_duration(Duration::seconds(-65)), "-1m 5s");
+    }
+
+    #[test]
+    fn format_optional_duration_some() {
+        assert_eq!(format_optional_duration(&Some(Duration::seconds(60))), "1m");
+    }
+
+    #[test]
+    fn format_optional_duration_none_renders_dash() {
+        assert_eq!(format_optional_duration(&None), "-");
     }
 }
