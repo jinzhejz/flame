@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For bulk submission, `Session::run()` returns a `TaskFuture<O>`. Awaiting it returns `TaskResult<O>` with task ID, session ID, terminal state, decoded output, and error details. `Session::invoke()` converts that result into a simpler handle that resolves to successful output or `FlameError`.
+For bulk submission, `Session::run()` returns a `TaskFuture<O>`. Awaiting it returns `Result<TaskResult<O>, FlameError>`: `Ok` contains task ID, session ID, terminal state, decoded output, and task-level error details, while `Err` reports SDK-level failures such as watch or decode errors. `Session::invoke()` converts that result into a simpler handle that resolves to successful output or `FlameError`.
 
 ## Write A Service
 

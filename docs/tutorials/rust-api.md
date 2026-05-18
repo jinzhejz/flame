@@ -110,6 +110,7 @@ Inside an executor, Flame sets `FLAME_INSTANCE_ENDPOINT`. The Rust SDK binds a U
 The client in [client.rs](../../examples/pi/rust/src/client.rs) creates a Flame session for the deployed application name:
 
 ```rust
+use futures::future::try_join_all;
 use flame_rs as flame;
 use flame_rs::client::SessionOptions;
 
@@ -128,7 +129,7 @@ let handles =
 let tasks = try_join_all(handles).await?;
 ```
 
-`Session::run()` creates a task and returns a `TaskFuture<PiResponse>`. Awaiting the future returns `TaskResult<PiResponse>`, including task ID, terminal state, decoded output, and error details.
+`Session::run()` creates a task and returns `Result<TaskFuture<PiResponse>, FlameError>`, so the first `try_join_all` handles task creation errors. Each `TaskFuture<PiResponse>` then resolves to `Result<TaskResult<PiResponse>, FlameError>`, so the second `try_join_all` handles SDK-level wait or decode errors. Remote task failures are still represented inside each `TaskResult` and are checked by `count_inside()`.
 
 For a single task where failures should become `FlameError`, use `invoke()`:
 
