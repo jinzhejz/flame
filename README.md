@@ -1,10 +1,10 @@
 # Flame: A Distributed Engine for AI
 
-[![license](https://img.shields.io/github/license/xflops-io/flame)](http://github.com/xflops-io/flame)
-[![RepoSize](https://img.shields.io/github/repo-size/xflops-io/flame)](http://github.com/xflops-io/flame)
-[![Release](https://img.shields.io/github/release/xflops-io/flame)](https://github.com/xflops-io/flame/releases)
+[![license](https://img.shields.io/github/license/xflops/flame)](http://github.com/xflops/flame)
+[![RepoSize](https://img.shields.io/github/repo-size/xflops/flame)](http://github.com/xflops/flame)
+[![Release](https://img.shields.io/github/release/xflops/flame)](https://github.com/xflops/flame/releases)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/7299/badge)](https://bestpractices.coreinfrastructure.org/projects/7299)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/xflops-io/flame)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/xflops/flame)
 
 Flame is a distributed engine for AI, providing a comprehensive suite of mechanisms commonly required by various classes of AI workloads, including agents, reinforcement learning, and more. Built upon over a decade and a half of experience running diverse high-performance workloads at scale across multiple systems and platforms, Flame incorporates best-of-breed ideas and practices from the open source community.
 
@@ -180,4 +180,4 @@ This project is licensed under the terms specified in the [LICENSE](LICENSE) fil
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=xflops-io/flame&type=timeline&legend=top-left)](https://www.star-history.com/#xflops-io/flame&type=timeline&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=xflops/flame&type=timeline&legend=top-left)](https://www.star-history.com/#xflops/flame&type=timeline&legend=top-left)
