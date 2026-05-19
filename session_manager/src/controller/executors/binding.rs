@@ -155,7 +155,16 @@ impl States for BindingState {
     async fn unregister_executor(&self) -> Result<(), FlameError> {
         trace_fn!("BindingState::unregister_executor");
 
-        Err(FlameError::InvalidState("Executor is binding".to_string()))
+        let mut e = lock_ptr!(self.executor)?;
+        tracing::debug!(
+            "Executor <{}> unregistering from binding state, moving to released",
+            e.id
+        );
+        e.state = ExecutorState::Released;
+        e.ssn_id = None;
+        e.task_id = None;
+
+        Ok(())
     }
 
     async fn bind_session(&self, ssn_ptr: SessionPtr) -> Result<(), FlameError> {

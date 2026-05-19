@@ -535,8 +535,16 @@ impl Controller {
             }
         };
 
-        let ssn_ptr = self.storage.get_session_ptr(ssn_id)?;
+        let ssn_ptr = match self.storage.get_session_ptr(ssn_id.clone()) {
+            Ok(ssn_ptr) => ssn_ptr,
+            Err(FlameError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+
         let ssn = lock_ptr!(ssn_ptr)?;
+        if ssn.status.state == SessionState::Closed {
+            return Ok(None);
+        }
 
         Ok(Some((*ssn).clone()))
     }
@@ -1209,6 +1217,72 @@ mod tests {
                 controller.get_executor(executor_id).unwrap().state,
                 ExecutorState::Binding
             );
+        }
+    }
+
+    mod wait_for_session_tests {
+        use super::*;
+        use uuid::Uuid;
+
+        #[tokio::test]
+        async fn returns_none_when_assigned_session_is_closed() {
+            let storage = create_test_storage().await;
+            let controller = new_ptr(storage);
+            let ssn_id = format!("closed-session-{}", Uuid::new_v4());
+            let executor_id = create_binding_executor(&controller, &ssn_id).await;
+
+            controller.close_session(ssn_id.clone()).await.unwrap();
+
+            let session = controller
+                .wait_for_session(executor_id.clone())
+                .await
+                .unwrap();
+            assert!(session.is_none());
+
+            let executor = controller.get_executor(executor_id.clone()).unwrap();
+            assert_eq!(executor.state, ExecutorState::Binding);
+            assert_eq!(executor.ssn_id, Some(ssn_id));
+
+            controller
+                .unregister_executor(executor_id.clone())
+                .await
+                .unwrap();
+
+            assert!(matches!(
+                controller.get_executor(executor_id).unwrap_err(),
+                FlameError::NotFound(_)
+            ));
+        }
+
+        #[tokio::test]
+        async fn returns_none_when_assigned_session_is_missing() {
+            let storage = create_test_storage().await;
+            let controller = new_ptr(storage);
+            let ssn_id = format!("missing-session-{}", Uuid::new_v4());
+            let executor_id = create_binding_executor(&controller, &ssn_id).await;
+
+            controller.close_session(ssn_id.clone()).await.unwrap();
+            controller.delete_session(ssn_id.clone()).await.unwrap();
+
+            let session = controller
+                .wait_for_session(executor_id.clone())
+                .await
+                .unwrap();
+            assert!(session.is_none());
+
+            let executor = controller.get_executor(executor_id.clone()).unwrap();
+            assert_eq!(executor.state, ExecutorState::Binding);
+            assert_eq!(executor.ssn_id, Some(ssn_id));
+
+            controller
+                .unregister_executor(executor_id.clone())
+                .await
+                .unwrap();
+
+            assert!(matches!(
+                controller.get_executor(executor_id).unwrap_err(),
+                FlameError::NotFound(_)
+            ));
         }
     }
 

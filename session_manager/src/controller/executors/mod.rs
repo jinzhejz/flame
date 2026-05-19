@@ -555,8 +555,13 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_unregister_executor_fails() {
+        async fn test_unregister_executor_transitions_to_released() {
             let exe_ptr = create_test_executor("exe-1", ExecutorState::Binding);
+            {
+                let mut exe = lock_ptr!(exe_ptr).unwrap();
+                exe.ssn_id = Some("ssn-1".to_string());
+                exe.task_id = Some(1);
+            }
             let state = BindingState {
                 storage: create_mock_storage().await,
                 executor: exe_ptr.clone(),
@@ -564,8 +569,11 @@ mod tests {
 
             let result = state.unregister_executor().await;
 
-            assert!(result.is_err());
-            assert!(matches!(result, Err(FlameError::InvalidState(_))));
+            assert!(result.is_ok());
+            let exe = lock_ptr!(exe_ptr).unwrap();
+            assert_eq!(exe.state, ExecutorState::Released);
+            assert_eq!(exe.ssn_id, None);
+            assert_eq!(exe.task_id, None);
         }
 
         #[tokio::test]

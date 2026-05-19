@@ -71,6 +71,8 @@ impl States for UnbindingState {
 
         let mut e = lock_ptr!(self.executor)?;
         e.state = ExecutorState::Unbinding;
+        e.ssn_id = None;
+        e.task_id = None;
 
         Ok(())
     }
