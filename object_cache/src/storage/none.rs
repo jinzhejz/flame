@@ -44,6 +44,13 @@ impl StorageEngine for NoneStorage {
         Ok(None)
     }
 
+    async fn read_schema(
+        &self,
+        _key: &ObjectKey,
+    ) -> Result<Option<std::sync::Arc<arrow::datatypes::Schema>>, FlameError> {
+        Ok(None)
+    }
+
     async fn patch_object(
         &self,
         key: &ObjectKey,
