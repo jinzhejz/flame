@@ -755,6 +755,24 @@ class TestPutObject:
         from flamepy.core import cache as cache_module
         from flamepy.core.types import FlameClientCache
 
+        writer_calls = {"entered": 0, "exited": 0, "batches": 0, "path": None}
+
+        class MockFileWriter:
+            def __enter__(self):
+                writer_calls["entered"] += 1
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                writer_calls["exited"] += 1
+                return False
+
+            def write_batch(self, batch):
+                writer_calls["batches"] += 1
+
+        def mock_new_file(path, schema):
+            writer_calls["path"] = path
+            return MockFileWriter()
+
         class MockLocation:
             uri = "grpc://local-cache:9090"
 
@@ -781,11 +799,16 @@ class TestPutObject:
             "_get_flight_client",
             lambda endpoint, tls=None: MockFlightClient(),
         )
+        monkeypatch.setattr(cache_module.pa.ipc, "new_file", mock_new_file)
 
         ref = cache_module.put_object("app/session", {"value": 1})
 
         assert ref.endpoint == "grpc://local-cache:9090"
         assert ref.version == 1
+        assert writer_calls["entered"] == 1
+        assert writer_calls["exited"] == 1
+        assert writer_calls["batches"] == 1
+        assert writer_calls["path"].parent == tmp_path / "app" / "session"
 
 
 class TestDeleteObjects:

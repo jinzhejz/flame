@@ -614,6 +614,24 @@ impl ObjectCache {
         )))
     }
 
+    async fn schema(&self, key: &ObjectKey) -> Result<Option<Arc<Schema>>, FlameError> {
+        let key_str = key.to_key().ok_or_else(|| {
+            FlameError::InvalidConfig("ObjectKey requires object_id for schema lookup".to_string())
+        })?;
+
+        {
+            let objects = lock_ptr!(self.objects)?;
+            if let Some(object) = objects.get(&key_str) {
+                return Ok(match &object.payload {
+                    ObjectPayload::ArrowTable { schema, .. } => Some(schema.clone()),
+                    ObjectPayload::Opaque(_) => None,
+                });
+            }
+        }
+
+        self.storage.read_schema(key).await
+    }
+
     async fn patch(&self, key: &ObjectKey, delta: Object) -> Result<ObjectMetadata, FlameError> {
         let key_str = key.to_key().ok_or_else(|| {
             FlameError::InvalidConfig("ObjectKey requires object_id for patch".to_string())
@@ -1185,13 +1203,9 @@ impl FlightService for FlightCacheServer {
         };
 
         let schema = if let Ok(object_key) = ObjectKey::try_from(key.as_str()) {
-            match self.cache.get(&object_key).await {
-                Ok(object) => match object.payload {
-                    ObjectPayload::ArrowTable { schema, .. } => {
-                        Bytes::from(encode_schema(&schema)?)
-                    }
-                    ObjectPayload::Opaque(_) => Bytes::new(),
-                },
+            match self.cache.schema(&object_key).await {
+                Ok(Some(schema)) => Bytes::from(encode_schema(&schema)?),
+                Ok(None) => Bytes::new(),
                 Err(_) => Bytes::new(),
             }
         } else {
@@ -2161,7 +2175,60 @@ mod tests {
         use super::*;
         use futures::StreamExt;
         use std::path::Path;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use tempfile::tempdir;
+
+        struct SchemaOnlyStorage {
+            schema: Arc<Schema>,
+            read_object_calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl crate::storage::StorageEngine for SchemaOnlyStorage {
+            async fn write_object(
+                &self,
+                _key: &ObjectKey,
+                _object: &Object,
+            ) -> Result<(), FlameError> {
+                Ok(())
+            }
+
+            async fn read_object(&self, _key: &ObjectKey) -> Result<Option<Object>, FlameError> {
+                self.read_object_calls.fetch_add(1, Ordering::SeqCst);
+                Err(FlameError::Internal(
+                    "read_object should not be used for schema lookup".to_string(),
+                ))
+            }
+
+            async fn read_schema(
+                &self,
+                _key: &ObjectKey,
+            ) -> Result<Option<Arc<Schema>>, FlameError> {
+                Ok(Some(self.schema.clone()))
+            }
+
+            async fn patch_object(
+                &self,
+                key: &ObjectKey,
+                _delta: &Object,
+            ) -> Result<ObjectMetadata, FlameError> {
+                Ok(ObjectMetadata {
+                    endpoint: String::new(),
+                    key: key.to_key().unwrap_or_default(),
+                    version: 0,
+                    size: 0,
+                    delta_count: 0,
+                })
+            }
+
+            async fn delete_objects(&self, _key: &ObjectKey) -> Result<(), FlameError> {
+                Ok(())
+            }
+
+            async fn load_objects(&self) -> Result<Vec<(ObjectKey, Object)>, FlameError> {
+                Ok(Vec::new())
+            }
+        }
 
         async fn create_disk_test_server() -> (FlightCacheServer, tempfile::TempDir) {
             let endpoint = test_endpoint();
@@ -2205,6 +2272,54 @@ mod tests {
                 .patch(&key, Object::new(0, b"patch-2".to_vec()))
                 .await
                 .unwrap()
+        }
+
+        #[tokio::test]
+        async fn get_flight_info_reads_native_schema_without_loading_object() {
+            let schema = Arc::new(
+                Schema::new(vec![Field::new("id", DataType::Int32, false)]).with_metadata(
+                    [(
+                        CACHE_FORMAT_METADATA_KEY.to_string(),
+                        CACHE_FORMAT_ARROW_TABLE.to_string(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+            );
+            let read_object_calls = Arc::new(AtomicUsize::new(0));
+            let storage = Box::new(SchemaOnlyStorage {
+                schema,
+                read_object_calls: read_object_calls.clone(),
+            });
+            let cache = Arc::new(ObjectCache::new(test_endpoint(), storage, None).unwrap());
+            let server = FlightCacheServer::new(cache);
+
+            let response = server
+                .get_flight_info(Request::new(FlightDescriptor::new_path(vec![
+                    "app/session/native".to_string(),
+                ])))
+                .await
+                .unwrap();
+            let info = response.into_inner();
+
+            assert_eq!(read_object_calls.load(Ordering::SeqCst), 0);
+            assert!(!info.schema.is_empty());
+
+            let decoded_schema = FlightCacheServer::extract_schema_from_flight_data(&FlightData {
+                flight_descriptor: None,
+                app_metadata: Bytes::new(),
+                data_header: info.schema,
+                data_body: Bytes::new(),
+            })
+            .unwrap();
+            assert_eq!(decoded_schema.field(0).name(), "id");
+            assert_eq!(
+                decoded_schema
+                    .metadata()
+                    .get(CACHE_FORMAT_METADATA_KEY)
+                    .unwrap(),
+                CACHE_FORMAT_ARROW_TABLE
+            );
         }
 
         async fn get_batches(server: &FlightCacheServer, ticket: &str) -> Vec<RecordBatch> {

@@ -112,6 +112,19 @@ impl StorageEngine for DiskStorage {
         .map_err(|e| FlameError::Internal(format!("Task join error: {}", e)))?
     }
 
+    async fn read_schema(&self, key: &ObjectKey) -> Result<Option<Arc<Schema>>, FlameError> {
+        let object_path = self.object_path(key);
+
+        tokio::task::spawn_blocking(move || {
+            if !object_path.exists() {
+                return Ok(None);
+            }
+            load_native_schema_from_file(&object_path)
+        })
+        .await
+        .map_err(|e| FlameError::Internal(format!("Task join error: {}", e)))?
+    }
+
     async fn patch_object(
         &self,
         key: &ObjectKey,
@@ -487,6 +500,30 @@ fn load_object_from_file(path: &Path) -> Result<Object, FlameError> {
     batch_to_object(batch)
 }
 
+fn load_native_schema_from_file(path: &Path) -> Result<Option<Arc<Schema>>, FlameError> {
+    let file = fs::File::open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            FlameError::NotFound(format!("Object file not found: {}", path.display()))
+        } else {
+            FlameError::Internal(format!("Failed to open object file: {}", e))
+        }
+    })?;
+    let reader = FileReader::try_new(file, None)
+        .map_err(|e| FlameError::Internal(format!("Failed to create reader: {}", e)))?;
+    let schema = reader.schema();
+
+    if schema
+        .metadata()
+        .get(CACHE_FORMAT_METADATA_KEY)
+        .map(|format| format == CACHE_FORMAT_ARROW_TABLE)
+        .unwrap_or(false)
+    {
+        Ok(Some(schema))
+    } else {
+        Ok(None)
+    }
+}
+
 fn batch_to_object(batch: &RecordBatch) -> Result<Object, FlameError> {
     if batch.num_rows() != 1 {
         return Err(FlameError::InvalidState(
@@ -574,6 +611,16 @@ mod tests {
 
         storage.write_object(&key, &object).await.unwrap();
 
+        let stored_schema = storage.read_schema(&key).await.unwrap().unwrap();
+        assert_eq!(stored_schema.field(0).name(), "id");
+        assert_eq!(
+            stored_schema
+                .metadata()
+                .get(CACHE_FORMAT_METADATA_KEY)
+                .unwrap(),
+            CACHE_FORMAT_ARROW_TABLE
+        );
+
         let loaded = storage.read_object(&key).await.unwrap().unwrap();
         assert_eq!(loaded.version, 7);
         match loaded.payload {
@@ -587,6 +634,18 @@ mod tests {
             }
             ObjectPayload::Opaque(_) => panic!("expected native Arrow payload"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_disk_storage_read_schema_returns_none_for_opaque_object() {
+        let temp_dir = tempdir().unwrap();
+        let storage = DiskStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let key = test_key("test-app", "test-session", "opaque");
+        let object = Object::new(1, vec![1, 2, 3, 4, 5]);
+        storage.write_object(&key, &object).await.unwrap();
+
+        assert!(storage.read_schema(&key).await.unwrap().is_none());
     }
 
     #[tokio::test]

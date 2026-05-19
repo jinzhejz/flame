@@ -879,10 +879,9 @@ def put_object(key_prefix: str, obj: Any) -> "ObjectRef":
         app_session_dir.mkdir(parents=True, exist_ok=True)
 
         object_path = app_session_dir / f"{object_key_with_id.object_id}.arrow"
-        writer = pa.ipc.new_file(object_path, payload.schema)
-        for batch in payload.batches:
-            writer.write_batch(batch)
-        writer.close()
+        with pa.ipc.new_file(object_path, payload.schema) as writer:
+            for batch in payload.batches:
+                writer.write_batch(batch)
 
         client = _get_flight_client(cache_endpoint, cache_tls)
         descriptor = flight.FlightDescriptor.for_path(key)
