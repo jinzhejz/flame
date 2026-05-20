@@ -4,6 +4,7 @@ These are defined in a separate module so they can be properly pickled.
 """
 
 import json
+import time
 from dataclasses import asdict
 from typing import Optional
 
@@ -20,8 +21,6 @@ from e2e.api import (
     TestRequest,
     TestResponse,
 )
-
-FAIL_INPUT = "__flame_e2e_fail__"
 
 
 def sum_func(a: int, b: int) -> int:
@@ -62,6 +61,17 @@ def return_tuple_func(a: int, b: str) -> tuple:
 def square_func(x: int) -> int:
     """Square a number."""
     return x * x
+
+
+def fuzzy_runner_echo_case(input_value: str, output_value: str, common_data: str, sleep_ms: int = 0) -> dict:
+    """Return a fuzzed Runner case after optionally simulating service work."""
+    if sleep_ms > 0:
+        time.sleep(sleep_ms / 1000.0)
+    return {
+        "common_data": common_data,
+        "input": input_value,
+        "output": output_value,
+    }
 
 
 class Calculator:

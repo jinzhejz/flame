@@ -17,7 +17,11 @@ from typing import Any, Dict, Optional
 
 @dataclass
 class TestContext:
+    __test__ = False
+
     common_data: Optional[str] = None
+    fail_on_task: bool = False
+    fail_on_session_enter: bool = False
 
 
 @dataclass
@@ -53,8 +57,13 @@ class TaskContextInfo:
 
 @dataclass
 class TestRequest:
+    __test__ = False
+
     update_common_data: bool = False
     input: Optional[str] = None
+    output: Optional[str] = None
+    sleep_ms: int = 0
+    fail_on_task: bool = False
     # Flags to control what context information to return
     request_task_context: bool = False
     request_session_context: bool = False
@@ -63,6 +72,8 @@ class TestRequest:
 
 @dataclass
 class TestResponse:
+    __test__ = False
+
     output: Optional[str] = None
     common_data: Optional[str] = None
     # Context information fields
