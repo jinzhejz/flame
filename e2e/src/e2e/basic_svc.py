@@ -12,6 +12,7 @@ limitations under the License.
 """
 
 import logging
+import time
 from typing import Optional
 
 import flamepy
@@ -25,7 +26,6 @@ from e2e.api import (
     TestResponse,
 )
 from e2e.helpers import (
-    FAIL_INPUT,
     deserialize_common_data,
     deserialize_request,
     serialize_response,
@@ -42,15 +42,21 @@ class BasicTestService(flamepy.FlameService):
         self._task_count = 0
         self._session_enter_count = 0
         self._session_leave_count = 0
+        self._test_context = TestContext()
         logger.info("BasicTestService initialized")
 
     def on_session_enter(self, context: flamepy.SessionContext):
         """Handle session enter and store context."""
         logger.info(f"Session entered: session_id={context.session_id}, app_name={context.application.name if context.application else None}")
         self._session_context = context
+        self._test_context = deserialize_common_data(context.common_data()) or TestContext()
         self._session_enter_count += 1
         self._task_count = 0
         logger.debug(f"Session enter count: {self._session_enter_count}, task count reset to: {self._task_count}")
+
+        if self._test_context.fail_on_session_enter:
+            logger.info(f"Failing session enter by common-data flag: session_id={context.session_id}")
+            raise RuntimeError("intentional session enter failure")
 
     def on_task_invoke(self, context: flamepy.TaskContext) -> Optional[flamepy.TaskOutput]:
         """Handle task invoke and return response with optional context information."""
@@ -58,17 +64,34 @@ class BasicTestService(flamepy.FlameService):
         self._task_count += 1
         logger.debug(f"Task count incremented to: {self._task_count}")
 
+        if self._test_context.fail_on_task:
+            error_message = f"Test error in task {context.task_id}"
+            logger.error(f"Raising exception by common-data flag: {error_message}")
+            raise ValueError(error_message)
+
         # Deserialize task input from bytes using helper function
         request: TestRequest = None
         if context.input is not None:
             logger.debug(f"Deserializing request from {len(context.input)} bytes")
             request = deserialize_request(context.input)
-            logger.debug(f"Request deserialized: input={request.input}, update_common_data={request.update_common_data}, request_task_context={request.request_task_context}, request_session_context={request.request_session_context}, request_application_context={request.request_application_context}")
+            logger.debug(
+                f"Request deserialized: input={request.input}, update_common_data={request.update_common_data}, "
+                f"output={request.output}, sleep_ms={request.sleep_ms}, fail_on_task={request.fail_on_task}, "
+                f"request_task_context={request.request_task_context}, "
+                f"request_session_context={request.request_session_context}, "
+                f"request_application_context={request.request_application_context}"
+            )
         else:
             logger.debug("No input provided for this task")
 
-        if request and request.input == FAIL_INPUT:
-            raise ValueError("Requested failure for E2E test")
+        if request and request.fail_on_task:
+            error_message = f"Test error in task {context.task_id}"
+            logger.error(f"Raising exception by request flag: {error_message}")
+            raise ValueError(error_message)
+
+        if request and request.sleep_ms > 0:
+            logger.info(f"Sleeping for requested E2E task duration: {request.sleep_ms}ms")
+            time.sleep(request.sleep_ms / 1000.0)
 
         # Get common data using helper function
         common_data = None
@@ -77,8 +100,7 @@ class BasicTestService(flamepy.FlameService):
             common_data_bytes = self._session_context.common_data()
             if common_data_bytes is not None:
                 logger.debug(f"Common data bytes found: {len(common_data_bytes)} bytes")
-                cxt_data = deserialize_common_data(common_data_bytes)
-                common_data = cxt_data.common_data if cxt_data and hasattr(cxt_data, "common_data") else None
+                common_data = self._test_context.common_data
                 logger.debug(f"Common data extracted: {common_data}")
             else:
                 logger.debug("No common data bytes in session context")
@@ -105,7 +127,7 @@ class BasicTestService(flamepy.FlameService):
 
         # Build response
         response = TestResponse(
-            output=request.input if request else None,
+            output=request.output if request and request.output is not None else request.input if request else None,
             common_data=response_common_data,
             service_state={
                 "task_count": self._task_count,
@@ -129,12 +151,10 @@ class BasicTestService(flamepy.FlameService):
         if request and request.request_session_context and self._session_context is not None:
             logger.debug("Adding session context information to response")
             common_data_bytes = self._session_context.common_data()
-            cxt_data = deserialize_common_data(common_data_bytes)
-
             response.session_context = SessionContextInfo(
                 session_id=self._session_context.session_id,
-                has_common_data=cxt_data is not None,
-                common_data_type=type(cxt_data).__name__ if cxt_data is not None else None,
+                has_common_data=common_data_bytes is not None,
+                common_data_type=type(self._test_context).__name__ if common_data_bytes is not None else None,
             )
             logger.debug(f"Session context added: session_id={response.session_context.session_id}, has_common_data={response.session_context.has_common_data}, common_data_type={response.session_context.common_data_type}")
 
@@ -171,6 +191,7 @@ class BasicTestService(flamepy.FlameService):
         logger.info(f"Session leaving: session_id={session_id}, total_tasks={self._task_count}, session_leave_count={self._session_leave_count + 1}")
         self._session_leave_count += 1
         self._session_context = None
+        self._test_context = TestContext()
         logger.debug("Session context cleared")
 
 

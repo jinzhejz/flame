@@ -50,6 +50,8 @@ from flamepy.proto.frontend_pb2 import (
     GetSessionRequest,
     GetTaskRequest,
     ListApplicationRequest,
+    ListExecutorRequest,
+    ListNodesRequest,
     ListSessionRequest,
     ListTaskRequest,
     OpenSessionRequest,
@@ -200,6 +202,16 @@ def unregister_application(name: str) -> None:
 def list_applications() -> List[Application]:
     conn = ConnectionInstance.instance()
     return conn.list_applications()
+
+
+def list_executors() -> List[Any]:
+    conn = ConnectionInstance.instance()
+    return conn.list_executors()
+
+
+def list_nodes() -> List[Any]:
+    conn = ConnectionInstance.instance()
+    return conn.list_nodes()
 
 
 def get_application(name: str) -> Optional[Application]:
@@ -418,6 +430,26 @@ class Connection:
             if e.code() == grpc.StatusCode.NOT_FOUND:
                 return None
             raise FlameError(FlameErrorCode.INTERNAL, f"failed to get application: {e.details()}")
+
+    def list_executors(self) -> List[Any]:
+        """List all executors."""
+        request = ListExecutorRequest()
+
+        try:
+            response = self._frontend.ListExecutor(request)
+            return list(response.executors)
+        except grpc.RpcError as e:
+            raise FlameError(FlameErrorCode.INTERNAL, f"failed to list executors: {e.details()}")
+
+    def list_nodes(self) -> List[Any]:
+        """List all nodes."""
+        request = ListNodesRequest()
+
+        try:
+            response = self._frontend.ListNodes(request)
+            return list(response.nodes)
+        except grpc.RpcError as e:
+            raise FlameError(FlameErrorCode.INTERNAL, f"failed to list nodes: {e.details()}")
 
     def create_session(self, attrs: SessionAttributes) -> "Session":
         """Create a new session."""

@@ -42,6 +42,11 @@ log_cli = true
 log_cli_level = "INFO"
 log_cli_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 log_cli_date_format = "%Y-%m-%d %H:%M:%S"
+markers = [
+    "stress: opt-in system stress tests; enable with FLAME_E2E_SYSTEM_TESTS=stress or all",
+    "longevity: opt-in sustained-runtime system tests; enable with FLAME_E2E_SYSTEM_TESTS=longevity or all",
+    "runner: opt-in system Runner tests; enable with FLAME_E2E_SYSTEM_TESTS=runner or all",
+]
 
 [project.optional-dependencies]
 dev = [
