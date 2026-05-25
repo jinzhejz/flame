@@ -1,6 +1,6 @@
 [project]
 name = "sra"
-version = "0.1.0"
+version = "0.2.0"
 description = "Simple Research Agent by Flame"
 readme = "README.md"
 requires-python = ">=3.12"

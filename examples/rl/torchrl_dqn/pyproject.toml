@@ -1,6 +1,6 @@
 [project]
 name = "torchrl-dqn"
-version = "0.1.0"
+version = "0.2.0"
 description = "TorchRL DQN Example using Flame Runner and patch_object replay buffer"
 readme = "README.md"
 requires-python = ">=3.10"
