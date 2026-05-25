@@ -5,7 +5,7 @@ This example demonstrates how to use the [Flame](https://github.com/xflops-io/fl
 ## Requirements
 
 - Python 3.12+
-- [FlamePy](https://github.com/xflops-io/flame) (`flamepy`) >= 0.5.0
+- [FlamePy](https://github.com/xflops-io/flame) (`flamepy`) >= 0.6.0
 - [openai](https://pypi.org/project/openai/) >= 2.8.1
 - [openai-agents](https://pypi.org/project/openai-agents/) >= 0.6.1
 
