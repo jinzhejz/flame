@@ -1,0 +1,76 @@
+name: Flame System Test
+
+"on":
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: System test profile to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - stress
+          - longevity
+          - runner
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flame-system-test-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CLICOLOR_FORCE: 1
+  E2E_SYSTEM_PROFILE: ${{ github.event.inputs.profile || 'all' }}
+
+jobs:
+  system-test:
+    name: Python System Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+        with:
+          version: latest
+
+      - name: Generate TLS certificates
+        run: |
+          chmod +x ci/generate-certs.sh
+          ci/generate-certs.sh -o ci/certs -s "flame-session-manager,flame-executor-manager,flame-object-cache,localhost,127.0.0.1" -i "172.20.0.0/24"
+
+      - name: Start Flame
+        run: |
+          cp ci/flame-cluster-docker.yaml ci/flame-cluster.yaml
+          docker compose up --build --force-recreate -d
+
+      - name: Wait for services to be ready
+        run: |
+          sleep 10
+          docker compose ps
+
+      - name: Run Python system tests
+        run: make e2e-py-system-docker E2E_SYSTEM_PROFILE="${E2E_SYSTEM_PROFILE}"
+
+      - name: Print session-manager logs
+        if: failure() || cancelled()
+        run: docker compose logs flame-session-manager --tail=500
+
+      - name: Print executor-manager logs
+        if: failure() || cancelled()
+        run: docker compose logs flame-executor-manager --tail=500
+
+      - name: Print object-cache logs
+        if: failure() || cancelled()
+        run: docker compose logs flame-object-cache --tail=500
+
+      - name: Stop Flame
+        if: always()
+        run: docker compose down --volumes --remove-orphans
