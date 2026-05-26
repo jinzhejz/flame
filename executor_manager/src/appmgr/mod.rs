@@ -314,15 +314,6 @@ impl ApplicationManager {
             return Some(site_packages);
         }
 
-        for entry in fs::read_dir(lib_path).ok()?.flatten() {
-            let python_dir = entry.path();
-            if python_dir.is_dir() && entry.file_name().to_string_lossy().starts_with("python") {
-                let site_packages = python_dir.join("site-packages");
-                if site_packages.exists() {
-                    return Some(site_packages);
-                }
-            }
-        }
         None
     }
 

@@ -28,20 +28,12 @@ impl PythonInstaller {
         Self
     }
 
-    fn find_base_site_packages(flame_home: &Path) -> Option<String> {
+    fn find_base_site_packages(flame_home: &Path, python_version: &str) -> Option<String> {
         let lib_path = flame_home.join("lib");
-        if !lib_path.exists() {
-            return None;
-        }
-
-        for entry in fs::read_dir(&lib_path).ok()?.flatten() {
-            let python_dir = entry.path();
-            if python_dir.is_dir() && entry.file_name().to_string_lossy().starts_with("python") {
-                let site_packages = python_dir.join("site-packages");
-                if site_packages.exists() {
-                    return Some(site_packages.to_string_lossy().to_string());
-                }
-            }
+        let target_dir = format!("python{}", python_version);
+        let site_packages = lib_path.join(&target_dir).join("site-packages");
+        if site_packages.exists() {
+            return Some(site_packages.to_string_lossy().to_string());
         }
         None
     }
@@ -162,7 +154,11 @@ impl Installer for PythonInstaller {
 
         let mut env_vars = HashMap::new();
 
-        let base_site_packages = Self::find_base_site_packages(flame_home);
+        let python_version = app_environments
+            .get("FLAME_PYTHON_VERSION")
+            .map(|s| s.as_str())
+            .unwrap_or("3.12");
+        let base_site_packages = Self::find_base_site_packages(flame_home, python_version);
         let mut python_paths = vec![
             deps_path.to_string_lossy().to_string(),
             src_path.to_string_lossy().to_string(),
