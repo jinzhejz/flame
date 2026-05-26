@@ -29,6 +29,29 @@ use crate::api::Script;
 use crate::script::{ScriptEngine, ScriptRuntime};
 
 const DEFAULT_ENTRYPOINT: &str = "main.py";
+const FLAME_ENDPOINT_ENV: &str = "FLAME_ENDPOINT";
+const FLAME_CACHE_ENDPOINT_ENV: &str = "FLAME_CACHE_ENDPOINT";
+const FLAME_CA_FILE_ENV: &str = "FLAME_CA_FILE";
+const PROPAGATED_ENV_VARS: &[&str] = &[
+    // Python/Flame
+    "PYTHONPATH",
+    "FLAME_HOME",
+    FLAME_PYTHON_VERSION_ENV,
+    FLAME_ENDPOINT_ENV,
+    FLAME_CACHE_ENDPOINT_ENV,
+    FLAME_CA_FILE_ENV,
+    // uv cache and config
+    "UV_CACHE_DIR",
+    "UV_PYTHON_INSTALL_DIR",
+    "XDG_CACHE_HOME",
+    // System essentials
+    "PATH",
+    "HOME",
+    "USER",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+];
 
 /// Get the uv command path from FLAME_HOME or fallback to system uv
 fn get_uv_cmd() -> String {
@@ -69,23 +92,6 @@ impl PythonScript {
 
         // Propagate essential environment variables from parent process
         let mut env = HashMap::new();
-        const PROPAGATED_ENV_VARS: &[&str] = &[
-            // Python/Flame
-            "PYTHONPATH",
-            "FLAME_HOME",
-            FLAME_PYTHON_VERSION_ENV,
-            // uv cache and config
-            "UV_CACHE_DIR",
-            "UV_PYTHON_INSTALL_DIR",
-            "XDG_CACHE_HOME",
-            // System essentials
-            "PATH",
-            "HOME",
-            "USER",
-            "TMPDIR",
-            "TMP",
-            "TEMP",
-        ];
         for key in PROPAGATED_ENV_VARS {
             if let Ok(value) = std::env::var(key) {
                 env.insert((*key).to_string(), value);
@@ -176,5 +182,17 @@ impl Drop for PythonScript {
         trace_fn!("PythonScript::drop");
 
         fs::remove_dir_all(Path::new(&self.runtime.work_dir)).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn propagates_nested_flame_client_env_vars() {
+        assert!(PROPAGATED_ENV_VARS.contains(&FLAME_ENDPOINT_ENV));
+        assert!(PROPAGATED_ENV_VARS.contains(&FLAME_CACHE_ENDPOINT_ENV));
+        assert!(PROPAGATED_ENV_VARS.contains(&FLAME_CA_FILE_ENV));
     }
 }
