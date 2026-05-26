@@ -1,7 +1,0 @@
-- When adding shared helpers, expose the narrowest API the call sites need. Keep normalization, path construction, and discovery details private unless an external caller clearly needs them.
-- Prefer direct `get_*` naming for simple lookup helpers in this repo when the function returns the current effective value rather than performing a broader resolution workflow.
-- Prefer concise helper names that match existing repo vocabulary; avoid filler words like `like` when the shorter name is equally clear.
-- Host shim should not infer or rewrite command semantics. Export/merge environment values and let each application definition own its command and arguments.
-- Name private helpers after the domain value they return, not the transformation mechanism. For Python runtime helpers, prefer `version_number` and `minor_version`.
-- Avoid parallel helpers when behavior only differs by optional context; make the context optional on the existing helper.
-- `flmexec` should stay on the Rust SDK boundary. Keep `flame-rs` independent from `common`; duplicate small stable constants/helpers in the SDK when needed instead of importing or re-exporting internal crates.
