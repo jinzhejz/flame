@@ -17,6 +17,9 @@ pub mod net;
 pub mod pprof;
 pub mod storage;
 
+pub const FLAME_PYTHON_VERSION_ENV: &str = "FLAME_PYTHON_VERSION";
+pub const DEFAULT_PYTHON_VERSION: &str = "3.12";
+
 use std::string::FromUtf8Error;
 
 use prost::UnknownEnumValue;

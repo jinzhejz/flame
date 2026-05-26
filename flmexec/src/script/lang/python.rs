@@ -23,6 +23,7 @@ use std::{
 use rand::Rng;
 
 use flame_rs::apis::FlameError;
+use flame_rs::{DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
 use stdng::trace_fn;
 
 use crate::api::Script;
@@ -115,9 +116,9 @@ impl ScriptEngine for PythonScript {
         let python_version = self
             .runtime
             .env
-            .get("FLAME_PYTHON_VERSION")
+            .get(FLAME_PYTHON_VERSION_ENV)
             .cloned()
-            .unwrap_or_else(|| "3.12".to_string());
+            .unwrap_or_else(|| DEFAULT_PYTHON_VERSION.to_string());
         tracing::debug!("Using Python version: {}", python_version);
 
         let mut child = Command::new(uv_cmd)

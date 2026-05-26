@@ -17,7 +17,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use async_trait::async_trait;
-use common::FlameError;
+use common::{FlameError, DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
 
 use super::installer::Installer;
 
@@ -155,9 +155,9 @@ impl Installer for PythonInstaller {
         let mut env_vars = HashMap::new();
 
         let python_version = app_environments
-            .get("FLAME_PYTHON_VERSION")
+            .get(FLAME_PYTHON_VERSION_ENV)
             .map(|s| s.as_str())
-            .unwrap_or("3.12");
+            .unwrap_or(DEFAULT_PYTHON_VERSION);
         let base_site_packages = Self::find_base_site_packages(flame_home, python_version);
         let mut python_paths = vec![
             deps_path.to_string_lossy().to_string(),

@@ -37,7 +37,7 @@ use tokio::sync::RwLock;
 use tonic::transport::ClientTlsConfig;
 
 use common::apis::ApplicationContext;
-use common::FlameError;
+use common::{FlameError, DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
 
 #[derive(Clone, Debug, Eq)]
 struct InstallKey {
@@ -277,9 +277,9 @@ impl ApplicationManager {
         let mut env_vars = HashMap::new();
 
         let python_version = app_environments
-            .get("FLAME_PYTHON_VERSION")
+            .get(FLAME_PYTHON_VERSION_ENV)
             .map(|s| s.as_str())
-            .unwrap_or("3.12");
+            .unwrap_or(DEFAULT_PYTHON_VERSION);
 
         let lib_path = self.flame_home.join("lib");
         if let Some(site_packages) = Self::find_site_packages(&lib_path, python_version) {
