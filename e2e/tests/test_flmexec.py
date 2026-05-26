@@ -17,7 +17,8 @@ import textwrap
 import flamepy
 import pytest
 
-RESULT_PREFIX = "FLMEXEC_RUNNER_NUMPY_RESULT="
+NODEPS_RESULT_PREFIX = "FLMEXEC_RUNNER_NODEPS_RESULT="
+NUMPY_RESULT_PREFIX = "FLMEXEC_RUNNER_NUMPY_RESULT="
 
 
 @pytest.fixture(scope="module")
@@ -37,6 +38,55 @@ def check_flmexec_runner_environment():
             pytest.skip("flmrun application is not registered")
     except Exception as exc:
         pytest.skip(f"Flame cluster is not available: {exc}")
+
+
+def _invoke_flmexec_python(script: str) -> str:
+    session = flamepy.create_session("flmexec")
+    try:
+        request = {"language": "python", "code": script, "input": None}
+        raw_response = session.invoke(json.dumps(request).encode("utf-8"))
+    finally:
+        session.close()
+
+    response = json.loads(raw_response.decode("utf-8"))
+    return bytes(response["data"]).decode("utf-8")
+
+
+@pytest.mark.timeout(600)
+def test_flmexec_python_script_starts_runner_without_project_metadata(check_flmexec_runner_environment):
+    script = textwrap.dedent(
+        f"""
+        import json
+        import sys
+        import traceback
+        import uuid
+
+        try:
+            from flamepy.runner import Runner
+
+            def test_fn(x):
+                return x * x
+
+            app_name = f"test-flmexec-runner-nodeps-{{uuid.uuid4().hex[:8]}}"
+
+            with Runner(app_name) as rr:
+                service = rr.service(test_fn)
+                result = rr.get([service(10), service(20)])
+
+            print("{NODEPS_RESULT_PREFIX}" + json.dumps(result))
+        except BaseException:
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
+            raise
+        """
+    )
+
+    output = _invoke_flmexec_python(script)
+    result_line = next((line for line in output.splitlines() if line.startswith(NODEPS_RESULT_PREFIX)), None)
+    assert result_line is not None, f"missing result line in flmexec output:\n{output}"
+
+    result = json.loads(result_line.removeprefix(NODEPS_RESULT_PREFIX))
+    assert result == [100, 400]
 
 
 @pytest.mark.timeout(600)
@@ -67,7 +117,7 @@ def test_flmexec_python_script_starts_runner_with_numpy_dependency(check_flmexec
                 service = rr.service(numpy_summary)
                 result = service(5).get()
 
-            print("{RESULT_PREFIX}" + json.dumps(result, sort_keys=True))
+            print("{NUMPY_RESULT_PREFIX}" + json.dumps(result, sort_keys=True))
         except BaseException:
             traceback.print_exc(file=sys.stdout)
             sys.stdout.flush()
@@ -75,17 +125,9 @@ def test_flmexec_python_script_starts_runner_with_numpy_dependency(check_flmexec
         """
     )
 
-    session = flamepy.create_session("flmexec")
-    try:
-        request = {"language": "python", "code": script, "input": None}
-        raw_response = session.invoke(json.dumps(request).encode("utf-8"))
-    finally:
-        session.close()
-
-    response = json.loads(raw_response.decode("utf-8"))
-    output = bytes(response["data"]).decode("utf-8")
-    result_line = next((line for line in output.splitlines() if line.startswith(RESULT_PREFIX)), None)
+    output = _invoke_flmexec_python(script)
+    result_line = next((line for line in output.splitlines() if line.startswith(NUMPY_RESULT_PREFIX)), None)
     assert result_line is not None, f"missing result line in flmexec output:\n{output}"
 
-    result = json.loads(result_line.removeprefix(RESULT_PREFIX))
+    result = json.loads(result_line.removeprefix(NUMPY_RESULT_PREFIX))
     assert result == {"dtype": "int64", "shape": [5], "sum": 15}

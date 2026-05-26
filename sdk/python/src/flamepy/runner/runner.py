@@ -12,6 +12,7 @@ limitations under the License.
 """
 
 import inspect
+import io
 import logging
 import os
 import tarfile
@@ -694,7 +695,7 @@ class Runner:
         # Create dist directory if it doesn't exist
         os.makedirs(dist_dir, exist_ok=True)
 
-        self._generate_pyproject_toml()
+        generated_pyproject = self._generated_pyproject_toml(cwd)
 
         package_filename = f"{self._name}.tar.gz"
         package_path = os.path.join(dist_dir, package_filename)
@@ -736,6 +737,12 @@ class Runner:
                     item_path = os.path.join(cwd, item)
                     tar.add(item_path, arcname=item, recursive=True, filter=lambda tarinfo: None if self._should_exclude(tarinfo.name, excludes) else tarinfo)
 
+                if generated_pyproject is not None:
+                    data = generated_pyproject.encode("utf-8")
+                    tarinfo = tarfile.TarInfo("pyproject.toml")
+                    tarinfo.size = len(data)
+                    tar.addfile(tarinfo, io.BytesIO(data))
+
             logger.debug(f"Created package: {package_path}")
             return package_path
 
@@ -750,36 +757,39 @@ class Runner:
                 return True
         return False
 
-    def _generate_pyproject_toml(self) -> None:
-        """Generate pyproject.toml if dependencies are specified and no pyproject.toml exists."""
-        cwd = os.getcwd()
-        pyproject_path = os.path.join(cwd, "pyproject.toml")
+    def _generated_pyproject_toml(self, cwd: str) -> Optional[str]:
+        """Return generated package metadata when the source tree needs it."""
+        if os.path.exists(os.path.join(cwd, "pyproject.toml")):
+            logger.debug("pyproject.toml already exists, skipping generated metadata")
+            return None
 
-        if os.path.exists(pyproject_path):
-            logger.debug("pyproject.toml already exists, skipping generation")
-            return
+        has_legacy_metadata = os.path.exists(os.path.join(cwd, "setup.py")) or os.path.exists(os.path.join(cwd, "setup.cfg"))
+        if has_legacy_metadata and not self._dependencies:
+            logger.debug("Python package metadata already exists, skipping generated metadata")
+            return None
 
-        if not self._dependencies:
-            logger.debug("No dependencies specified and no pyproject.toml found")
-            return
+        deps = sorted(self._dependencies or [])
+        if deps:
+            deps_block = "dependencies = [\n    " + ",\n    ".join(f'"{dep}"' for dep in deps) + ",\n]"
+        else:
+            deps_block = "dependencies = []"
 
-        deps_str = ",\n    ".join(f'"{dep}"' for dep in sorted(self._dependencies))
+        content = f'''[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-        content = f'''[project]
+[project]
 name = "{self._name}"
 version = "0.1.0"
 requires-python = ">=3.9"
-dependencies = [
-    {deps_str},
-]
+{deps_block}
+
+[tool.setuptools]
+py-modules = []
 '''
 
-        try:
-            with open(pyproject_path, "w") as f:
-                f.write(content)
-            logger.info(f"Generated pyproject.toml with dependencies: {list(self._dependencies)}")
-        except Exception as e:
-            logger.error(f"Failed to generate pyproject.toml: {e}")
+        logger.info(f"Generated package pyproject.toml with dependencies: {deps}")
+        return content
 
     def _upload_package(self) -> str:
         """Upload the package to the storage location.

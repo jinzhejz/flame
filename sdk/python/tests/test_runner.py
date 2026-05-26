@@ -1,6 +1,9 @@
 """Tests for flamepy runner APIs."""
 
+import sys
+import tarfile
 from concurrent.futures import Future
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +12,15 @@ from flamepy.runner.storage import CacheStorage, FileStorage, create_storage_bac
 from flamepy.runner.types import RunnerContext, RunnerRequest, SessionContext
 
 # Runner Storage Tests
+
+
+def _parse_toml(content: str):
+    if sys.version_info < (3, 11):
+        return None
+
+    import tomllib
+
+    return tomllib.loads(content)
 
 
 def test_file_storage_basic(tmp_path):
@@ -223,6 +235,62 @@ def test_runner_should_exclude_handles_nested_paths():
 
     assert runner._should_exclude("src/__pycache__/module.pyc", ["*.pyc"])
     assert runner._should_exclude("tests/data/file.tmp", ["*.tmp"])
+
+
+def test_runner_package_generates_metadata_without_dependencies(tmp_path, monkeypatch):
+    """Runner packages ad hoc script directories as installable Python projects."""
+    from flamepy.runner.runner import Runner
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "script.py").write_text("def test_fn(x):\n    return x * x\n")
+
+    runner = object.__new__(Runner)
+    runner._name = "test-run"
+    runner._dependencies = None
+    runner._context = SimpleNamespace(package=None)
+
+    package_path = runner._create_package()
+
+    assert not (tmp_path / "pyproject.toml").exists()
+    with tarfile.open(package_path, "r:gz") as package:
+        pyproject = package.extractfile("pyproject.toml")
+        assert pyproject is not None
+        content = pyproject.read().decode("utf-8")
+
+    assert 'name = "test-run"' in content
+    assert "dependencies = []" in content
+    assert "py-modules = []" in content
+    parsed = _parse_toml(content)
+    if parsed is not None:
+        assert parsed["project"]["dependencies"] == []
+
+
+def test_runner_package_generates_dependency_metadata_in_archive(tmp_path, monkeypatch):
+    """Generated dependency metadata is packaged without mutating the caller cwd."""
+    from flamepy.runner.runner import Runner
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "script.py").write_text("def test_fn(x):\n    return x * x\n")
+
+    runner = object.__new__(Runner)
+    runner._name = "test-run"
+    runner._dependencies = ["pandas>=2", "numpy"]
+    runner._context = SimpleNamespace(package=None)
+
+    package_path = runner._create_package()
+
+    assert not (tmp_path / "pyproject.toml").exists()
+    with tarfile.open(package_path, "r:gz") as package:
+        pyproject = package.extractfile("pyproject.toml")
+        assert pyproject is not None
+        content = pyproject.read().decode("utf-8")
+
+    assert '"numpy"' in content
+    assert '"pandas>=2"' in content
+    assert "py-modules = []" in content
+    parsed = _parse_toml(content)
+    if parsed is not None:
+        assert parsed["project"]["dependencies"] == ["numpy", "pandas>=2"]
 
 
 def test_runnerservice_generates_method_wrappers():
