@@ -124,12 +124,7 @@ impl ScriptEngine for PythonScript {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .current_dir(&self.runtime.work_dir)
-            .args([
-                "run",
-                "--python",
-                &python_version,
-                &self.runtime.entrypoint,
-            ])
+            .args(["run", "--python", &python_version, &self.runtime.entrypoint])
             .envs(self.runtime.env.iter().map(|(k, v)| (k.clone(), v.clone())))
             .spawn()
             .map_err(|e| FlameError::Internal(format!("failed to start subprocess: {e}")))?;
