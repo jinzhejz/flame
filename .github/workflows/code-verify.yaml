@@ -5,21 +5,14 @@ env:
 jobs:
   ci:
     name: Code Verify
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [stable]
-        os: [ubuntu-latest]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: ${{ matrix.rust }}
-          profile: minimal
-          override: true
+          toolchain: stable
           components: rustfmt, clippy
       - name: Install gRPC
         run: |
@@ -28,17 +21,5 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Cargo build
-        run: cargo build --release
       - name: Cargo test
         run: cargo test --workspace --exclude flame-rs --exclude cri-rs
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
-      - name: Generate coverage report
-        run: cargo tarpaulin --workspace --exclude flame-rs --exclude cri-rs --exclude candle-based-example --out xml --output-dir coverage
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: coverage/cobertura.xml
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}

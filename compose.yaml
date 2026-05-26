@@ -58,7 +58,11 @@ services:
       - ./ci/certs:/etc/flame/certs:ro
       - ./examples:/opt/examples
       - ./e2e:/opt/e2e
-      - flame-work:/usr/local/flame/work
+      - type: volume
+        source: flame-work
+        target: /usr/local/flame/work
+        volume:
+          nocopy: true
       - ./logs:/usr/local/flame/logs
       - ./work/cache:/usr/local/flame/data/cache
     networks:
