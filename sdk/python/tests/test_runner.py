@@ -253,6 +253,7 @@ def test_runner_package_generates_metadata_without_dependencies(tmp_path, monkey
 
     assert not (tmp_path / "pyproject.toml").exists()
     with tarfile.open(package_path, "r:gz") as package:
+        assert package.getmember("pyproject.toml").mode == 0o644
         pyproject = package.extractfile("pyproject.toml")
         assert pyproject is not None
         content = pyproject.read().decode("utf-8")
@@ -281,6 +282,7 @@ def test_runner_package_generates_dependency_metadata_in_archive(tmp_path, monke
 
     assert not (tmp_path / "pyproject.toml").exists()
     with tarfile.open(package_path, "r:gz") as package:
+        assert package.getmember("pyproject.toml").mode == 0o644
         pyproject = package.extractfile("pyproject.toml")
         assert pyproject is not None
         content = pyproject.read().decode("utf-8")
@@ -291,6 +293,33 @@ def test_runner_package_generates_dependency_metadata_in_archive(tmp_path, monke
     parsed = _parse_toml(content)
     if parsed is not None:
         assert parsed["project"]["dependencies"] == ["numpy", "pandas>=2"]
+
+
+@pytest.mark.parametrize("metadata_file", ["setup.py", "setup.cfg"])
+def test_runner_package_skips_generated_metadata_for_legacy_projects(tmp_path, monkeypatch, caplog, metadata_file):
+    """Runner does not add pyproject.toml over legacy package metadata."""
+    from flamepy.runner.runner import Runner
+
+    monkeypatch.chdir(tmp_path)
+    if metadata_file == "setup.py":
+        (tmp_path / metadata_file).write_text("from setuptools import setup\nsetup(name='legacy-runner')\n")
+    else:
+        (tmp_path / metadata_file).write_text("[metadata]\nname = legacy-runner\n")
+
+    runner = object.__new__(Runner)
+    runner._name = "test-run"
+    runner._dependencies = ["numpy"]
+    runner._context = SimpleNamespace(package=None)
+
+    caplog.set_level("WARNING", logger="flamepy.runner.runner")
+    package_path = runner._create_package()
+
+    with tarfile.open(package_path, "r:gz") as package:
+        names = package.getnames()
+
+    assert metadata_file in names
+    assert "pyproject.toml" not in names
+    assert "Skipping pyproject.toml generation" in caplog.text
 
 
 def test_runnerservice_generates_method_wrappers():

@@ -741,6 +741,7 @@ class Runner:
                     data = generated_pyproject.encode("utf-8")
                     tarinfo = tarfile.TarInfo("pyproject.toml")
                     tarinfo.size = len(data)
+                    tarinfo.mode = 0o644
                     tar.addfile(tarinfo, io.BytesIO(data))
 
             logger.debug(f"Created package: {package_path}")
@@ -764,8 +765,15 @@ class Runner:
             return None
 
         has_legacy_metadata = os.path.exists(os.path.join(cwd, "setup.py")) or os.path.exists(os.path.join(cwd, "setup.cfg"))
-        if has_legacy_metadata and not self._dependencies:
-            logger.debug("Python package metadata already exists, skipping generated metadata")
+        if has_legacy_metadata:
+            if self._dependencies:
+                logger.warning(
+                    "Python package metadata (setup.py/setup.cfg) already exists. "
+                    "Skipping pyproject.toml generation to avoid conflicting with existing metadata. "
+                    "Please specify dependencies in your setup.py or setup.cfg."
+                )
+            else:
+                logger.debug("Python package metadata already exists, skipping generated metadata")
             return None
 
         deps = sorted(self._dependencies or [])
