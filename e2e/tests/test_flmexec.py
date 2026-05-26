@@ -44,27 +44,34 @@ def test_flmexec_python_script_starts_runner_with_numpy_dependency(check_flmexec
     script = textwrap.dedent(
         f"""
         import json
+        import sys
+        import traceback
         import uuid
 
-        from flamepy.runner import Runner
+        try:
+            from flamepy.runner import Runner
 
-        def numpy_summary(limit):
-            import numpy as np
+            def numpy_summary(limit):
+                import numpy as np
 
-            values = np.arange(1, limit + 1, dtype=np.int64)
-            return {{
-                "dtype": str(values.dtype),
-                "shape": list(values.shape),
-                "sum": int(values.sum()),
-            }}
+                values = np.arange(1, limit + 1, dtype=np.int64)
+                return {{
+                    "dtype": str(values.dtype),
+                    "shape": list(values.shape),
+                    "sum": int(values.sum()),
+                }}
 
-        app_name = f"test-flmexec-runner-numpy-{{uuid.uuid4().hex[:8]}}"
+            app_name = f"test-flmexec-runner-numpy-{{uuid.uuid4().hex[:8]}}"
 
-        with Runner(app_name, dependencies=["numpy"]) as rr:
-            service = rr.service(numpy_summary)
-            result = service(5).get()
+            with Runner(app_name, dependencies=["numpy"]) as rr:
+                service = rr.service(numpy_summary)
+                result = service(5).get()
 
-        print("{RESULT_PREFIX}" + json.dumps(result, sort_keys=True))
+            print("{RESULT_PREFIX}" + json.dumps(result, sort_keys=True))
+        except BaseException:
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
+            raise
         """
     )
 

@@ -13,9 +13,10 @@ limitations under the License.
 
 use std::{
     collections::HashMap,
+    env,
     fs::{self, File},
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
 };
@@ -29,13 +30,16 @@ use crate::api::Script;
 use crate::script::{ScriptEngine, ScriptRuntime};
 
 const DEFAULT_ENTRYPOINT: &str = "main.py";
+const DEFAULT_FLAME_HOME: &str = "/usr/local/flame";
+const PYTHONPATH_ENV: &str = "PYTHONPATH";
+const FLAME_HOME_ENV: &str = "FLAME_HOME";
 const FLAME_ENDPOINT_ENV: &str = "FLAME_ENDPOINT";
 const FLAME_CACHE_ENDPOINT_ENV: &str = "FLAME_CACHE_ENDPOINT";
 const FLAME_CA_FILE_ENV: &str = "FLAME_CA_FILE";
 const PROPAGATED_ENV_VARS: &[&str] = &[
     // Python/Flame
-    "PYTHONPATH",
-    "FLAME_HOME",
+    PYTHONPATH_ENV,
+    FLAME_HOME_ENV,
     FLAME_PYTHON_VERSION_ENV,
     FLAME_ENDPOINT_ENV,
     FLAME_CACHE_ENDPOINT_ENV,
@@ -55,7 +59,7 @@ const PROPAGATED_ENV_VARS: &[&str] = &[
 
 /// Get the uv command path from FLAME_HOME or fallback to system uv
 fn get_uv_cmd() -> String {
-    let flame_home = std::env::var("FLAME_HOME").unwrap_or_else(|_| "/usr/local/flame".to_string());
+    let flame_home = env::var(FLAME_HOME_ENV).unwrap_or_else(|_| DEFAULT_FLAME_HOME.to_string());
     let uv_path = format!("{}/bin/uv", flame_home);
 
     // Check if uv exists in FLAME_HOME, otherwise fallback to system uv
@@ -63,6 +67,104 @@ fn get_uv_cmd() -> String {
         uv_path
     } else {
         "/usr/bin/uv".to_string()
+    }
+}
+
+fn configure_python_env(envs: &mut HashMap<String, String>) -> String {
+    let flame_home = flame_home(envs);
+    envs.entry(FLAME_HOME_ENV.to_string())
+        .or_insert_with(|| flame_home.to_string_lossy().to_string());
+
+    let python_version = python_version(envs, &flame_home);
+    envs.insert(FLAME_PYTHON_VERSION_ENV.to_string(), python_version.clone());
+
+    let site_packages = site_packages_path(&flame_home, &python_version);
+    if site_packages.is_dir() {
+        prepend_path_env(envs, PYTHONPATH_ENV, &site_packages);
+    } else {
+        tracing::debug!(
+            "Flame Python site-packages not found: {}",
+            site_packages.display()
+        );
+    }
+
+    python_version
+}
+
+fn flame_home(envs: &HashMap<String, String>) -> PathBuf {
+    envs.get(FLAME_HOME_ENV)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_FLAME_HOME))
+}
+
+fn python_version(envs: &HashMap<String, String>, flame_home: &Path) -> String {
+    envs.get(FLAME_PYTHON_VERSION_ENV)
+        .map(|version| version_number(version))
+        .filter(|version| !version.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| latest_installed_python_version(flame_home))
+        .unwrap_or_else(|| DEFAULT_PYTHON_VERSION.to_string())
+}
+
+fn version_number(version: &str) -> &str {
+    version.strip_prefix("python").unwrap_or(version)
+}
+
+fn latest_installed_python_version(flame_home: &Path) -> Option<String> {
+    let lib_path = flame_home.join("lib");
+    let mut versions = fs::read_dir(lib_path)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() || !path.join("site-packages").is_dir() {
+                return None;
+            }
+
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.strip_prefix("python")
+                .filter(|version| !version.is_empty())
+                .map(|version| version.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    versions.sort_by_key(|version| minor_version(version));
+    versions.pop()
+}
+
+fn minor_version(version: &str) -> Vec<u32> {
+    version
+        .split('.')
+        .map(|part| part.parse::<u32>().unwrap_or(0))
+        .collect()
+}
+
+fn site_packages_path(flame_home: &Path, version: &str) -> PathBuf {
+    flame_home
+        .join("lib")
+        .join(format!("python{}", version_number(version)))
+        .join("site-packages")
+}
+
+fn prepend_path_env(envs: &mut HashMap<String, String>, key: &str, path: &Path) {
+    let mut paths = vec![path.to_path_buf()];
+    if let Some(existing) = envs.get(key) {
+        paths.extend(
+            env::split_paths(existing)
+                .filter(|existing_path| !existing_path.as_os_str().is_empty())
+                .filter(|existing_path| existing_path != path),
+        );
+    }
+
+    match env::join_paths(paths) {
+        Ok(joined) => {
+            envs.insert(key.to_string(), joined.to_string_lossy().to_string());
+        }
+        Err(e) => {
+            tracing::warn!("Failed to build {key} with Flame site-packages: {e}");
+        }
     }
 }
 
@@ -97,6 +199,7 @@ impl PythonScript {
                 env.insert((*key).to_string(), value);
             }
         }
+        configure_python_env(&mut env);
 
         let runtime = ScriptRuntime {
             entrypoint: full_path.to_string_lossy().to_string(),
@@ -194,5 +297,59 @@ mod tests {
         assert!(PROPAGATED_ENV_VARS.contains(&FLAME_ENDPOINT_ENV));
         assert!(PROPAGATED_ENV_VARS.contains(&FLAME_CACHE_ENDPOINT_ENV));
         assert!(PROPAGATED_ENV_VARS.contains(&FLAME_CA_FILE_ENV));
+    }
+
+    #[test]
+    fn configures_python_env_from_installed_flame_site_packages() {
+        let temp = tempfile::tempdir().unwrap();
+        let site_packages = temp.path().join("lib/python3.12/site-packages");
+        fs::create_dir_all(&site_packages).unwrap();
+
+        let existing_path = temp.path().join("existing-pythonpath");
+        let mut envs = HashMap::from([
+            (
+                FLAME_HOME_ENV.to_string(),
+                temp.path().to_string_lossy().to_string(),
+            ),
+            (
+                PYTHONPATH_ENV.to_string(),
+                existing_path.to_string_lossy().to_string(),
+            ),
+        ]);
+
+        let python_version = configure_python_env(&mut envs);
+
+        assert_eq!(python_version, "3.12");
+        assert_eq!(envs.get(FLAME_PYTHON_VERSION_ENV).unwrap(), "3.12");
+
+        let python_paths = env::split_paths(envs.get(PYTHONPATH_ENV).unwrap()).collect::<Vec<_>>();
+        assert_eq!(python_paths, vec![site_packages, existing_path]);
+    }
+
+    #[test]
+    fn configures_requested_python_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let site_packages = temp.path().join("lib/python3.11/site-packages");
+        fs::create_dir_all(&site_packages).unwrap();
+
+        let mut envs = HashMap::from([
+            (
+                FLAME_HOME_ENV.to_string(),
+                temp.path().to_string_lossy().to_string(),
+            ),
+            (
+                FLAME_PYTHON_VERSION_ENV.to_string(),
+                "python3.11".to_string(),
+            ),
+        ]);
+
+        let python_version = configure_python_env(&mut envs);
+
+        assert_eq!(python_version, "3.11");
+        assert_eq!(envs.get(FLAME_PYTHON_VERSION_ENV).unwrap(), "3.11");
+        assert_eq!(
+            env::split_paths(envs.get(PYTHONPATH_ENV).unwrap()).collect::<Vec<_>>(),
+            vec![site_packages]
+        );
     }
 }
