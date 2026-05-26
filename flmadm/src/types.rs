@@ -31,7 +31,7 @@ impl InstallProfile {
     }
 }
 
-pub const DEFAULT_PYTHON_VERSION: &str = "3.12";
+pub const DEFAULT_PYTHON_VERSIONS: &[&str] = &["3.11", "3.12"];
 
 /// Configuration for the install command
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ pub struct InstallConfig {
     pub verbose: bool,
     pub profiles: Vec<InstallProfile>,
     pub force_overwrite: bool,
-    pub python_version: String,
+    pub python_versions: Vec<String>,
     pub with_examples: bool,
 }
 
@@ -66,7 +66,10 @@ impl Default for InstallConfig {
                 InstallProfile::Cache,
             ],
             force_overwrite: false,
-            python_version: DEFAULT_PYTHON_VERSION.to_string(),
+            python_versions: DEFAULT_PYTHON_VERSIONS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             with_examples: false,
         }
     }
@@ -323,9 +326,9 @@ mod tests {
         use super::*;
 
         #[test]
-        fn default_python_version() {
+        fn default_python_versions() {
             let config = InstallConfig::default();
-            assert_eq!(config.python_version, "3.12");
+            assert_eq!(config.python_versions, vec!["3.11", "3.12"]);
         }
 
         #[test]
@@ -358,12 +361,12 @@ mod tests {
         }
 
         #[test]
-        fn custom_python_version() {
+        fn custom_python_versions() {
             let config = InstallConfig {
-                python_version: "3.11".to_string(),
+                python_versions: vec!["3.10".to_string()],
                 ..Default::default()
             };
-            assert_eq!(config.python_version, "3.11");
+            assert_eq!(config.python_versions, vec!["3.10"]);
         }
     }
 
@@ -460,8 +463,8 @@ mod tests {
         use super::*;
 
         #[test]
-        fn default_python_version_value() {
-            assert_eq!(DEFAULT_PYTHON_VERSION, "3.12");
+        fn default_python_versions_value() {
+            assert_eq!(DEFAULT_PYTHON_VERSIONS, &["3.11", "3.12"]);
         }
 
         #[test]

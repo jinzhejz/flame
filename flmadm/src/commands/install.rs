@@ -253,17 +253,20 @@ fn install_components(
     // Install uv (for worker and client profiles)
     installation_manager.install_uv(paths, &config.profiles)?;
 
-    // Install Python SDK
-    installation_manager.install_python_sdk(
+    let installed_python_versions = installation_manager.install_python_sdk(
         src_dir,
         paths,
         &config.profiles,
         config.force_overwrite,
-        &config.python_version,
+        &config.python_versions,
     )?;
 
-    // Generate environment script
-    installation_manager.generate_env_script(paths, &config.python_version)?;
+    let versions_for_env = if installed_python_versions.is_empty() {
+        &config.python_versions
+    } else {
+        &installed_python_versions
+    };
+    installation_manager.generate_env_script(paths, versions_for_env)?;
 
     // Install database migrations
     installation_manager.install_migrations(src_dir, paths, &config.profiles)?;

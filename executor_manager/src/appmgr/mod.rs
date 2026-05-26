@@ -276,8 +276,13 @@ impl ApplicationManager {
     ) -> HashMap<String, String> {
         let mut env_vars = HashMap::new();
 
+        let python_version = app_environments
+            .get("FLAME_PYTHON_VERSION")
+            .map(|s| s.as_str())
+            .unwrap_or("3.12");
+
         let lib_path = self.flame_home.join("lib");
-        if let Some(site_packages) = Self::find_site_packages(&lib_path) {
+        if let Some(site_packages) = Self::find_site_packages(&lib_path, python_version) {
             let site_packages_str = site_packages.to_string_lossy().to_string();
 
             let mut python_paths = vec![site_packages_str.clone()];
@@ -298,9 +303,15 @@ impl ApplicationManager {
         env_vars
     }
 
-    fn find_site_packages(lib_path: &Path) -> Option<PathBuf> {
+    fn find_site_packages(lib_path: &Path, python_version: &str) -> Option<PathBuf> {
         if !lib_path.exists() {
             return None;
+        }
+
+        let target_dir = format!("python{}", python_version);
+        let site_packages = lib_path.join(&target_dir).join("site-packages");
+        if site_packages.exists() {
+            return Some(site_packages);
         }
 
         for entry in fs::read_dir(lib_path).ok()?.flatten() {

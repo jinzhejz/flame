@@ -243,18 +243,19 @@ impl InstallationManager {
     }
 
     /// Install Python SDK using uv pip install --prefix
+    /// Returns the list of Python versions that were successfully installed
     pub fn install_python_sdk(
         &self,
         src_dir: &Path,
         paths: &InstallationPaths,
         profiles: &[InstallProfile],
         force_overwrite: bool,
-        python_version: &str,
-    ) -> Result<()> {
+        python_versions: &[String],
+    ) -> Result<Vec<String>> {
         let components_to_install = self.get_components_to_install(profiles);
         if !components_to_install.iter().any(|c| c == "flamepy") {
             println!("⊘ Skipped Python SDK (not in selected profiles)");
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         println!("🐍 Installing Python SDK...");
@@ -282,7 +283,7 @@ impl InstallationManager {
             let response = input.trim().to_lowercase();
             if response != "y" && response != "yes" {
                 println!("  ⊘ Skipped Python SDK (already exists)");
-                return Ok(());
+                return Ok(Vec::new());
             }
         }
 
@@ -311,49 +312,88 @@ impl InstallationManager {
         }
         println!("  ✓ Built wheel to: {}", paths.wheels.display());
 
-        println!("  📥 Installing flamepy to lib...");
-
         let uv_cache_dir = paths.cache.join("uv");
         fs::create_dir_all(&uv_cache_dir).context("Failed to create cache directory")?;
 
-        let install_output = std::process::Command::new(&uv_path)
-            .arg("pip")
-            .arg("install")
-            .arg("--python")
-            .arg(format!("python{}", python_version))
-            .arg("--prefix")
-            .arg(&paths.prefix)
-            .arg("--find-links")
-            .arg(&paths.wheels)
-            .arg("flamepy")
-            .env("UV_CACHE_DIR", &uv_cache_dir)
-            .output()
-            .context("Failed to execute uv pip install")?;
+        let mut installed_versions = Vec::new();
+        for python_version in python_versions {
+            println!("  📥 Installing flamepy for Python {}...", python_version);
 
-        if !install_output.status.success() {
-            let stderr = String::from_utf8_lossy(&install_output.stderr);
-            anyhow::bail!("Failed to install flamepy: {}", stderr);
+            let install_output = std::process::Command::new(&uv_path)
+                .arg("pip")
+                .arg("install")
+                .arg("--python")
+                .arg(format!("python{}", python_version))
+                .arg("--prefix")
+                .arg(&paths.prefix)
+                .arg("--find-links")
+                .arg(&paths.wheels)
+                .arg("flamepy")
+                .env("UV_CACHE_DIR", &uv_cache_dir)
+                .output()
+                .context("Failed to execute uv pip install")?;
+
+            if !install_output.status.success() {
+                let stderr = String::from_utf8_lossy(&install_output.stderr);
+                if stderr.contains("No interpreter found")
+                    || stderr.contains("not found")
+                    || stderr.contains("Cannot find")
+                {
+                    println!("  ⚠ Python {} not available, skipping", python_version);
+                    continue;
+                }
+                anyhow::bail!(
+                    "Failed to install flamepy for Python {}: {}",
+                    python_version,
+                    stderr
+                );
+            }
+
+            installed_versions.push(python_version.clone());
+            println!(
+                "  ✓ Installed flamepy for Python {} to: {}",
+                python_version,
+                paths.lib.display()
+            );
         }
 
-        println!("  ✓ Installed flamepy to: {}", paths.lib.display());
+        if installed_versions.is_empty() {
+            anyhow::bail!(
+                "Failed to install flamepy: no Python interpreters found for versions {:?}",
+                python_versions
+            );
+        }
 
-        Ok(())
+        Ok(installed_versions)
     }
 
     /// Generate flmenv.sh script for environment setup
     pub fn generate_env_script(
         &self,
         paths: &InstallationPaths,
-        python_version: &str,
+        python_versions: &[String],
     ) -> Result<()> {
         println!("📜 Generating environment script...");
 
         let env_script_path = paths.sbin.join("flmenv.sh");
 
-        let site_packages = paths
-            .lib
-            .join(format!("python{}", python_version))
-            .join("site-packages");
+        let site_packages_entries: Vec<String> = python_versions
+            .iter()
+            .map(|v| {
+                paths
+                    .lib
+                    .join(format!("python{}", v))
+                    .join("site-packages")
+                    .display()
+                    .to_string()
+            })
+            .collect();
+
+        let site_packages_bash_array = site_packages_entries
+            .iter()
+            .map(|p| format!("\"{}\"", p))
+            .collect::<Vec<_>>()
+            .join(" ");
 
         let script_content = format!(
             r#"#!/bin/bash
@@ -380,23 +420,40 @@ mkdir -p "$UV_CACHE_DIR" 2>/dev/null || true
 mkdir -p "$PIP_CACHE_DIR" 2>/dev/null || true
 
 # Python environment for flamepy
-FLAME_SITE_PACKAGES="{site_packages}"
+# Detect current Python version and set PYTHONPATH accordingly
+FLAME_SITE_PACKAGES_DIRS=({site_packages_bash_array})
 FLAME_LD_DIRS=""
-if [ -d "$FLAME_SITE_PACKAGES" ]; then
-    if [[ ":$PYTHONPATH:" != *":$FLAME_SITE_PACKAGES:"* ]]; then
-        export PYTHONPATH="$FLAME_SITE_PACKAGES:$PYTHONPATH"
-    fi
-    
-    # Find all directories containing shared libraries for native extensions
-    while IFS= read -r dir; do
-        [ -z "$dir" ] && continue
-        abs_dir=$(cd "$dir" 2>/dev/null && pwd)
-        if [ -n "$abs_dir" ] && [[ ":$LD_LIBRARY_PATH:" != *":$abs_dir:"* ]]; then
-            export LD_LIBRARY_PATH="$abs_dir:$LD_LIBRARY_PATH"
-            FLAME_LD_DIRS="$FLAME_LD_DIRS $abs_dir"
-        fi
-    done < <(find "$FLAME_SITE_PACKAGES" \( -name "*.so" -o -name "*.dylib" \) -type f 2>/dev/null | xargs -r -n1 dirname 2>/dev/null | sort -u)
+
+# Get the active Python's major.minor version
+FLAME_PYTHON_VERSION=""
+if command -v python3 &>/dev/null; then
+    FLAME_PYTHON_VERSION=$(python3 -c 'import sys; print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")')
+elif command -v python &>/dev/null; then
+    FLAME_PYTHON_VERSION=$(python -c 'import sys; print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")')
 fi
+
+FLAME_MATCHED_SITE_PACKAGES=""
+for FLAME_SITE_PACKAGES in "${{FLAME_SITE_PACKAGES_DIRS[@]}}"; do
+    if [ -d "$FLAME_SITE_PACKAGES" ]; then
+        # Only add site-packages matching the active Python version
+        if [ -n "$FLAME_PYTHON_VERSION" ] && [[ "$FLAME_SITE_PACKAGES" == *"python$FLAME_PYTHON_VERSION"* ]]; then
+            if [[ ":$PYTHONPATH:" != *":$FLAME_SITE_PACKAGES:"* ]]; then
+                export PYTHONPATH="$FLAME_SITE_PACKAGES:$PYTHONPATH"
+                FLAME_MATCHED_SITE_PACKAGES="$FLAME_SITE_PACKAGES"
+            fi
+            
+            # Find all directories containing shared libraries for native extensions
+            while IFS= read -r dir; do
+                [ -z "$dir" ] && continue
+                abs_dir=$(cd "$dir" 2>/dev/null && pwd)
+                if [ -n "$abs_dir" ] && [[ ":$LD_LIBRARY_PATH:" != *":$abs_dir:"* ]]; then
+                    export LD_LIBRARY_PATH="$abs_dir:$LD_LIBRARY_PATH"
+                    FLAME_LD_DIRS="$FLAME_LD_DIRS $abs_dir"
+                fi
+            done < <(find "$FLAME_SITE_PACKAGES" \( -name "*.so" -o -name "*.dylib" \) -type f 2>/dev/null | xargs -r -n1 dirname 2>/dev/null | sort -u)
+        fi
+    fi
+done
 
 # Print environment info (only when sourced interactively)
 if [[ $- == *i* ]]; then
@@ -405,8 +462,11 @@ if [[ $- == *i* ]]; then
     echo "  PATH includes: {prefix}/bin"
     echo "  UV_CACHE_DIR=$UV_CACHE_DIR"
     echo "  PIP_CACHE_DIR=$PIP_CACHE_DIR"
-    if [ -d "$FLAME_SITE_PACKAGES" ]; then
-        echo "  PYTHONPATH includes: $FLAME_SITE_PACKAGES"
+    if [ -n "$FLAME_MATCHED_SITE_PACKAGES" ]; then
+        echo "  PYTHONPATH includes: $FLAME_MATCHED_SITE_PACKAGES (Python $FLAME_PYTHON_VERSION)"
+    elif [ -n "$FLAME_PYTHON_VERSION" ]; then
+        echo "  Warning: No flamepy installation found for Python $FLAME_PYTHON_VERSION"
+        echo "  Available versions: {site_packages_bash_array}"
     fi
     if [ -n "$FLAME_LD_DIRS" ]; then
         echo "  LD_LIBRARY_PATH includes: $FLAME_LD_DIRS"
@@ -414,7 +474,7 @@ if [[ $- == *i* ]]; then
 fi
 "#,
             prefix = paths.prefix.display(),
-            site_packages = site_packages.display(),
+            site_packages_bash_array = site_packages_bash_array,
         );
 
         fs::write(&env_script_path, script_content).context("Failed to write flmenv.sh")?;
