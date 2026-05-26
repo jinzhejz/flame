@@ -15,10 +15,13 @@ pub mod apis;
 pub mod ctx;
 pub mod net;
 pub mod pprof;
+pub mod python;
 pub mod storage;
 
 pub const FLAME_PYTHON_VERSION_ENV: &str = "FLAME_PYTHON_VERSION";
 pub const DEFAULT_PYTHON_VERSION: &str = "3.12";
+
+pub use python::{get_python_runtime, PythonRuntime};
 
 use std::string::FromUtf8Error;
 
@@ -263,6 +266,7 @@ pub fn default_applications() -> HashMap<String, ApplicationAttributes> {
     let flmexec_cmd = "${FLAME_HOME}/bin/flmexec-service".to_string();
     let flmping_cmd = "${FLAME_HOME}/bin/flmping-service".to_string();
     let flmping_url = "file://${FLAME_HOME}/bin/flmping-service".to_string();
+    let flmrun_cmd = "${FLAME_HOME}/bin/uv".to_string();
 
     HashMap::from([
         (
@@ -298,8 +302,15 @@ pub fn default_applications() -> HashMap<String, ApplicationAttributes> {
                     "The Flame Runner application for executing customized Python applications."
                         .to_string(),
                 ),
-                command: Some("python3".to_string()),
-                arguments: vec!["-m".to_string(), "flamepy.runner.runpy".to_string()],
+                command: Some(flmrun_cmd),
+                arguments: vec![
+                    "run".to_string(),
+                    "--python".to_string(),
+                    "python${FLAME_PYTHON_VERSION}".to_string(),
+                    "python".to_string(),
+                    "-m".to_string(),
+                    "flamepy.runner.runpy".to_string(),
+                ],
                 installer: Some("python".to_string()),
                 working_directory: None,
                 ..ApplicationAttributes::default()
@@ -339,5 +350,24 @@ mod tests {
         let status = Status::from(error);
         assert_eq!(status.code(), Code::InvalidArgument);
         assert_eq!(status.message(), "test");
+    }
+
+    #[test]
+    fn default_flmrun_uses_env_selected_uv_python() {
+        let apps = default_applications();
+        let flmrun = apps.get("flmrun").unwrap();
+
+        assert_eq!(flmrun.command.as_deref(), Some("${FLAME_HOME}/bin/uv"));
+        assert_eq!(
+            flmrun.arguments,
+            vec![
+                "run",
+                "--python",
+                "python${FLAME_PYTHON_VERSION}",
+                "python",
+                "-m",
+                "flamepy.runner.runpy",
+            ]
+        );
     }
 }

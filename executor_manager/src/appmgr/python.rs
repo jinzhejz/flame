@@ -17,7 +17,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use async_trait::async_trait;
-use common::{FlameError, DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
+use common::{get_python_runtime, FlameError, FLAME_PYTHON_VERSION_ENV};
 
 use super::installer::Installer;
 
@@ -26,16 +26,6 @@ pub struct PythonInstaller;
 impl PythonInstaller {
     pub fn new() -> Self {
         Self
-    }
-
-    fn find_base_site_packages(flame_home: &Path, python_version: &str) -> Option<String> {
-        let lib_path = flame_home.join("lib");
-        let target_dir = format!("python{}", python_version);
-        let site_packages = lib_path.join(&target_dir).join("site-packages");
-        if site_packages.exists() {
-            return Some(site_packages.to_string_lossy().to_string());
-        }
-        None
     }
 
     fn find_native_lib_paths(deps_path: &Path) -> Vec<String> {
@@ -129,10 +119,17 @@ impl Installer for PythonInstaller {
             .try_clone()
             .map_err(|e| FlameError::Internal(format!("failed to clone log file handle: {}", e)))?;
 
+        let requested_python_version = app_environments
+            .get(FLAME_PYTHON_VERSION_ENV)
+            .map(|s| s.as_str());
+        let runtime = get_python_runtime(flame_home, requested_python_version);
+
         let status = tokio::process::Command::new(&uv_cmd)
             .arg("pip")
             .arg("install")
             .arg("--link-mode=copy")
+            .arg("--python")
+            .arg(format!("python{}", runtime.version))
             .arg("--target")
             .arg(&deps_path)
             .arg(".")
@@ -154,11 +151,10 @@ impl Installer for PythonInstaller {
 
         let mut env_vars = HashMap::new();
 
-        let python_version = app_environments
-            .get(FLAME_PYTHON_VERSION_ENV)
-            .map(|s| s.as_str())
-            .unwrap_or(DEFAULT_PYTHON_VERSION);
-        let base_site_packages = Self::find_base_site_packages(flame_home, python_version);
+        let base_site_packages = runtime
+            .site_packages
+            .as_ref()
+            .map(|site_packages| site_packages.to_string_lossy().to_string());
         let mut python_paths = vec![
             deps_path.to_string_lossy().to_string(),
             src_path.to_string_lossy().to_string(),
@@ -198,14 +194,17 @@ impl Installer for PythonInstaller {
             "PIP_CACHE_DIR".to_string(),
             pip_cache_path.to_string_lossy().to_string(),
         );
+        env_vars.insert(FLAME_PYTHON_VERSION_ENV.to_string(), runtime.version);
 
         tracing::info!(
-            "Python installation completed for app <{}>: PYTHONPATH={}, LD_LIBRARY_PATH={}, UV_CACHE_DIR={}, PIP_CACHE_DIR={}",
+            "Python installation completed for app <{}>: PYTHONPATH={}, LD_LIBRARY_PATH={}, UV_CACHE_DIR={}, PIP_CACHE_DIR={}, {}={}",
             app_name,
             env_vars.get("PYTHONPATH").unwrap_or(&String::new()),
             env_vars.get("LD_LIBRARY_PATH").unwrap_or(&String::new()),
             env_vars.get("UV_CACHE_DIR").unwrap_or(&String::new()),
-            env_vars.get("PIP_CACHE_DIR").unwrap_or(&String::new())
+            env_vars.get("PIP_CACHE_DIR").unwrap_or(&String::new()),
+            FLAME_PYTHON_VERSION_ENV,
+            env_vars.get(FLAME_PYTHON_VERSION_ENV).unwrap_or(&String::new())
         );
 
         Ok(env_vars)

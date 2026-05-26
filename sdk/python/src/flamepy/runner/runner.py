@@ -351,7 +351,7 @@ class Runner:
         _started: Whether the runner has been started
         _fail_if_exists: Whether to raise an exception if the application already exists
         _dependencies: List of pip dependencies for auto-generated pyproject.toml
-        _python_version: Python version to use for execution (e.g., "3.12")
+        _python_version: Optional Python version to use for execution (e.g., "3.12")
     """
 
     def __init__(
@@ -359,7 +359,7 @@ class Runner:
         name: str,
         fail_if_exists: bool = False,
         dependencies: Optional[List[str]] = None,
-        python_version: str = "3.12",
+        python_version: Optional[str] = None,
     ):
         """Initialize and start a Runner.
 
@@ -369,8 +369,8 @@ class Runner:
                            If False (default), skip registration if the application already exists.
             dependencies: List of pip dependencies (e.g., ["numpy", "pandas>=2.0"]).
                          If provided and no pyproject.toml exists, one will be auto-generated.
-            python_version: Python version to use for execution (default: "3.12").
-                           This controls which Python interpreter uv uses when running scripts.
+            python_version: Python version to use for execution.
+                           If omitted, the executor uses the latest installed Flame Python SDK.
         """
         self._name = name
         self._services: List[RunnerService] = []
@@ -453,7 +453,8 @@ class Runner:
             logger.debug(f"Working directory: {working_directory}")
 
             environments = dict(template_app.environments) if template_app.environments else {}
-            environments["FLAME_PYTHON_VERSION"] = self._python_version
+            if self._python_version:
+                environments["FLAME_PYTHON_VERSION"] = self._python_version
 
             app_attrs = ApplicationAttributes(
                 image=template_app.image,

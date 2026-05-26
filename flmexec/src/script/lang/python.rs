@@ -22,8 +22,7 @@ use std::{
 
 use rand::Rng;
 
-use flame_rs::apis::FlameError;
-use flame_rs::{DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
+use flame_rs::{apis::FlameError, DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
 use stdng::trace_fn;
 
 use crate::api::Script;
@@ -74,6 +73,7 @@ impl PythonScript {
             // Python/Flame
             "PYTHONPATH",
             "FLAME_HOME",
+            FLAME_PYTHON_VERSION_ENV,
             // uv cache and config
             "UV_CACHE_DIR",
             "UV_PYTHON_INSTALL_DIR",
@@ -117,15 +117,16 @@ impl ScriptEngine for PythonScript {
             .runtime
             .env
             .get(FLAME_PYTHON_VERSION_ENV)
-            .cloned()
-            .unwrap_or_else(|| DEFAULT_PYTHON_VERSION.to_string());
+            .map(String::as_str)
+            .filter(|version| !version.is_empty())
+            .unwrap_or(DEFAULT_PYTHON_VERSION);
         tracing::debug!("Using Python version: {}", python_version);
 
         let mut child = Command::new(uv_cmd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .current_dir(&self.runtime.work_dir)
-            .args(["run", "--python", &python_version, &self.runtime.entrypoint])
+            .args(["run", "--python", python_version, &self.runtime.entrypoint])
             .envs(self.runtime.env.iter().map(|(k, v)| (k.clone(), v.clone())))
             .spawn()
             .map_err(|e| FlameError::Internal(format!("failed to start subprocess: {e}")))?;

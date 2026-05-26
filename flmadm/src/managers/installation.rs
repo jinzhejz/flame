@@ -440,6 +440,7 @@ if [ -z "$FLAME_PYTHON_VERSION" ]; then
         | sort -V \
         | tail -1)
 fi
+export FLAME_PYTHON_VERSION
 
 # Python environment for flamepy
 FLAME_LD_DIRS=""

@@ -17,8 +17,10 @@ pub mod message;
 pub mod object;
 pub mod service;
 
+pub const FLAME_PYTHON_VERSION_ENV: &str = "FLAME_PYTHON_VERSION";
+pub const DEFAULT_PYTHON_VERSION: &str = "3.12";
+
 pub use client::{Connection, Session, SessionOptions, TaskFuture, TaskHandle, TaskResult};
-pub use common::{DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
 pub use message::{FlameMessage, FromTaskOutput, IntoCommonData, IntoTaskInput};
 pub use object::{
     delete_objects, download_object, get_object, patch_object, put_object, update_object,

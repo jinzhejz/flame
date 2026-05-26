@@ -1,4 +1,4 @@
-.PHONY: help install test clean build-protos format lint
+.PHONY: help install test clean build-protos format lint typecheck
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -25,6 +25,8 @@ format: ## Format code with ruff
 lint: ## Run linting checks
 	uv run -n --extra dev ruff format --check src
 	uv run -n --extra dev ruff check src
+
+typecheck: ## Run type checking
 	uv run -n --extra dev mypy src
 
 check: format lint test ## Run all checks (format, lint, test)

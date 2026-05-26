@@ -37,21 +37,28 @@ use tokio::sync::RwLock;
 use tonic::transport::ClientTlsConfig;
 
 use common::apis::ApplicationContext;
-use common::{FlameError, DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
+use common::{get_python_runtime, FlameError, FLAME_PYTHON_VERSION_ENV};
 
 #[derive(Clone, Debug, Eq)]
 struct InstallKey {
     app_name: String,
     installer: String,
     url: Option<String>,
+    python_version: Option<String>,
 }
 
 impl InstallKey {
-    fn new(app_name: &str, installer: &InstallerType, url: Option<&String>) -> Self {
+    fn new(
+        app_name: &str,
+        installer: &InstallerType,
+        url: Option<&String>,
+        python_version: Option<&String>,
+    ) -> Self {
         Self {
             app_name: app_name.to_string(),
             installer: installer.to_string(),
             url: url.cloned(),
+            python_version: python_version.cloned(),
         }
     }
 
@@ -60,6 +67,9 @@ impl InstallKey {
         update_release_hash(&mut hasher, "app", Some(&self.app_name));
         update_release_hash(&mut hasher, "installer", Some(&self.installer));
         update_release_hash(&mut hasher, "url", self.url.as_deref());
+        if let Some(version) = &self.python_version {
+            update_release_hash(&mut hasher, "python_version", Some(version));
+        }
         hasher
             .finalize()
             .iter()
@@ -88,6 +98,7 @@ impl PartialEq for InstallKey {
         self.app_name == other.app_name
             && self.installer == other.installer
             && self.url == other.url
+            && self.python_version == other.python_version
     }
 }
 
@@ -96,6 +107,7 @@ impl Hash for InstallKey {
         self.app_name.hash(state);
         self.installer.hash(state);
         self.url.hash(state);
+        self.python_version.hash(state);
     }
 }
 
@@ -163,7 +175,21 @@ impl ApplicationManager {
             }
             Some(installer_str) => installer_str.parse::<InstallerType>()?,
         };
-        let install_key = InstallKey::new(&app.name, &installer_type, app.url.as_ref());
+        let python_version = (installer_type == InstallerType::Python).then(|| {
+            get_python_runtime(
+                &self.flame_home,
+                app.environments
+                    .get(FLAME_PYTHON_VERSION_ENV)
+                    .map(|s| s.as_str()),
+            )
+            .version
+        });
+        let install_key = InstallKey::new(
+            &app.name,
+            &installer_type,
+            app.url.as_ref(),
+            python_version.as_ref(),
+        );
 
         {
             let app_entry = {
@@ -276,13 +302,13 @@ impl ApplicationManager {
     ) -> HashMap<String, String> {
         let mut env_vars = HashMap::new();
 
-        let python_version = app_environments
+        let requested_python_version = app_environments
             .get(FLAME_PYTHON_VERSION_ENV)
-            .map(|s| s.as_str())
-            .unwrap_or(DEFAULT_PYTHON_VERSION);
+            .map(|s| s.as_str());
 
-        let lib_path = self.flame_home.join("lib");
-        if let Some(site_packages) = Self::find_site_packages(&lib_path, python_version) {
+        let runtime = get_python_runtime(&self.flame_home, requested_python_version);
+        if let Some(site_packages) = runtime.site_packages {
+            env_vars.insert(FLAME_PYTHON_VERSION_ENV.to_string(), runtime.version);
             let site_packages_str = site_packages.to_string_lossy().to_string();
 
             let mut python_paths = vec![site_packages_str.clone()];
@@ -301,20 +327,6 @@ impl ApplicationManager {
         }
 
         env_vars
-    }
-
-    fn find_site_packages(lib_path: &Path, python_version: &str) -> Option<PathBuf> {
-        if !lib_path.exists() {
-            return None;
-        }
-
-        let target_dir = format!("python{}", python_version);
-        let site_packages = lib_path.join(&target_dir).join("site-packages");
-        if site_packages.exists() {
-            return Some(site_packages);
-        }
-
-        None
     }
 
     fn find_native_lib_paths(site_packages: &Path) -> Vec<String> {
@@ -443,6 +455,7 @@ mod tests {
             "demo",
             &InstallerType::Binary,
             Some(&"grpc://cache/demo/pkg/demo.tar.gz".to_string()),
+            None,
         );
 
         assert_eq!(
@@ -457,10 +470,22 @@ mod tests {
             "demo",
             &InstallerType::Binary,
             Some(&"grpc://cache/demo/pkg/demo.tar.gz".to_string()),
+            None,
         );
-        let without_url = InstallKey::new("demo", &InstallerType::Binary, None);
+        let without_url = InstallKey::new("demo", &InstallerType::Binary, None, None);
 
         assert_ne!(with_url.release_id(), without_url.release_id());
         assert_eq!(without_url.release_id().len(), 64);
+    }
+
+    #[test]
+    fn release_id_distinguishes_python_version() {
+        let url = "grpc://cache/demo/pkg/demo.tar.gz".to_string();
+        let py311 = "3.11".to_string();
+        let py312 = "3.12".to_string();
+        let with_py311 = InstallKey::new("demo", &InstallerType::Python, Some(&url), Some(&py311));
+        let with_py312 = InstallKey::new("demo", &InstallerType::Python, Some(&url), Some(&py312));
+
+        assert_ne!(with_py311.release_id(), with_py312.release_id());
     }
 }
