@@ -51,6 +51,8 @@ Repo: https://github.com/xflops-io/flame
 ---
 
 ## Task Management
+Task files under `tasks/` are local agent notes. Keep them out of commits and PRs unless the user explicitly asks to publish them.
+
 1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go

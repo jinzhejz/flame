@@ -22,7 +22,7 @@ use std::{
 
 use rand::Rng;
 
-use flame_rs::apis::FlameError;
+use flame_rs::{apis::FlameError, DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
 use stdng::trace_fn;
 
 use crate::api::Script;
@@ -67,11 +67,36 @@ impl PythonScript {
 
         let full_path = work_dir.join(entrypoint);
 
+        // Propagate essential environment variables from parent process
+        let mut env = HashMap::new();
+        const PROPAGATED_ENV_VARS: &[&str] = &[
+            // Python/Flame
+            "PYTHONPATH",
+            "FLAME_HOME",
+            FLAME_PYTHON_VERSION_ENV,
+            // uv cache and config
+            "UV_CACHE_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+            "XDG_CACHE_HOME",
+            // System essentials
+            "PATH",
+            "HOME",
+            "USER",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+        ];
+        for key in PROPAGATED_ENV_VARS {
+            if let Ok(value) = std::env::var(key) {
+                env.insert((*key).to_string(), value);
+            }
+        }
+
         let runtime = ScriptRuntime {
             entrypoint: full_path.to_string_lossy().to_string(),
             work_dir: work_dir.to_string_lossy().to_string(),
             input: script.input.clone(),
-            env: HashMap::new(),
+            env,
         };
 
         Ok(Self { runtime })
@@ -88,11 +113,20 @@ impl ScriptEngine for PythonScript {
         let uv_cmd = get_uv_cmd();
         tracing::debug!("Using uv from: {}", uv_cmd);
 
+        let python_version = self
+            .runtime
+            .env
+            .get(FLAME_PYTHON_VERSION_ENV)
+            .map(String::as_str)
+            .filter(|version| !version.is_empty())
+            .unwrap_or(DEFAULT_PYTHON_VERSION);
+        tracing::debug!("Using Python version: {}", python_version);
+
         let mut child = Command::new(uv_cmd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .current_dir(&self.runtime.work_dir)
-            .args(["run", &self.runtime.entrypoint])
+            .args(["run", "--python", python_version, &self.runtime.entrypoint])
             .envs(self.runtime.env.iter().map(|(k, v)| (k.clone(), v.clone())))
             .spawn()
             .map_err(|e| FlameError::Internal(format!("failed to start subprocess: {e}")))?;

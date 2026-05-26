@@ -2050,7 +2050,6 @@ dependencies = [
  "bson",
  "bytes",
  "chrono",
- "common",
  "flame-rs-macros",
  "futures",
  "prost 0.14.3",

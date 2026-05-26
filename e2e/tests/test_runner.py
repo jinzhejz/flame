@@ -818,7 +818,13 @@ class TestFlmrunApplication:
         flmrun = flamepy.get_application(FLMRUN_E2E_APP)
         assert flmrun.name == FLMRUN_E2E_APP
         assert flmrun.state == flamepy.ApplicationState.ENABLED
-        assert flmrun.command == "python3"
+        assert flmrun.command.endswith("/bin/uv")
+        assert flmrun.arguments[:4] == [
+            "run",
+            "--python",
+            "python${FLAME_PYTHON_VERSION}",
+            "python",
+        ]
 
     def test_flmrun_sum_function(self, setup_flmrun_with_e2e):
         """Test Case 1: Run a simple sum function remotely."""

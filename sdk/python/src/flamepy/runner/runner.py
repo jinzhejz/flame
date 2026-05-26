@@ -350,15 +350,27 @@ class Runner:
         _storage_backend: Storage backend instance for uploading/deleting packages
         _started: Whether the runner has been started
         _fail_if_exists: Whether to raise an exception if the application already exists
+        _dependencies: List of pip dependencies for auto-generated pyproject.toml
+        _python_version: Optional Python version to use for execution (e.g., "3.12")
     """
 
-    def __init__(self, name: str, fail_if_exists: bool = False):
+    def __init__(
+        self,
+        name: str,
+        fail_if_exists: bool = False,
+        dependencies: Optional[List[str]] = None,
+        python_version: Optional[str] = None,
+    ):
         """Initialize and start a Runner.
 
         Args:
             name: The name of the application/package
             fail_if_exists: If True, raise an exception if the application already exists.
                            If False (default), skip registration if the application already exists.
+            dependencies: List of pip dependencies (e.g., ["numpy", "pandas>=2.0"]).
+                         If provided and no pyproject.toml exists, one will be auto-generated.
+            python_version: Python version to use for execution.
+                           If omitted, the executor uses the latest installed Flame Python SDK.
         """
         self._name = name
         self._services: List[RunnerService] = []
@@ -368,8 +380,10 @@ class Runner:
         self._storage_backend: Optional[StorageBackend] = None
         self._started = False
         self._fail_if_exists = fail_if_exists
+        self._dependencies = dependencies
+        self._python_version = python_version
 
-        logger.debug(f"Initialized Runner '{name}' (fail_if_exists={fail_if_exists})")
+        logger.debug(f"Initialized Runner '{name}' (fail_if_exists={fail_if_exists}, dependencies={dependencies}, python_version={python_version})")
 
         self._start()
 
@@ -438,13 +452,17 @@ class Runner:
 
             logger.debug(f"Working directory: {working_directory}")
 
+            environments = dict(template_app.environments) if template_app.environments else {}
+            if self._python_version:
+                environments["FLAME_PYTHON_VERSION"] = self._python_version
+
             app_attrs = ApplicationAttributes(
                 image=template_app.image,
                 command=template_app.command,
                 description=f"Runner application: {self._name}",
                 labels=template_app.labels,
                 arguments=template_app.arguments,
-                environments=template_app.environments,
+                environments=environments,
                 working_directory=working_directory,
                 max_instances=template_app.max_instances,
                 delay_release=template_app.delay_release,
@@ -676,6 +694,8 @@ class Runner:
         # Create dist directory if it doesn't exist
         os.makedirs(dist_dir, exist_ok=True)
 
+        self._generate_pyproject_toml()
+
         package_filename = f"{self._name}.tar.gz"
         package_path = os.path.join(dist_dir, package_filename)
 
@@ -723,21 +743,43 @@ class Runner:
             raise FlameError(FlameErrorCode.INTERNAL, f"Failed to create package: {str(e)}")
 
     def _should_exclude(self, name: str, patterns: List[str]) -> bool:
-        """Check if a file/directory name should be excluded.
-
-        Args:
-            name: The file or directory name
-            patterns: List of exclusion patterns (supports wildcards)
-
-        Returns:
-            True if the name should be excluded
-        """
         import fnmatch
 
         for pattern in patterns:
             if fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(os.path.basename(name), pattern):
                 return True
         return False
+
+    def _generate_pyproject_toml(self) -> None:
+        """Generate pyproject.toml if dependencies are specified and no pyproject.toml exists."""
+        cwd = os.getcwd()
+        pyproject_path = os.path.join(cwd, "pyproject.toml")
+
+        if os.path.exists(pyproject_path):
+            logger.debug("pyproject.toml already exists, skipping generation")
+            return
+
+        if not self._dependencies:
+            logger.debug("No dependencies specified and no pyproject.toml found")
+            return
+
+        deps_str = ",\n    ".join(f'"{dep}"' for dep in sorted(self._dependencies))
+
+        content = f'''[project]
+name = "{self._name}"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    {deps_str},
+]
+'''
+
+        try:
+            with open(pyproject_path, "w") as f:
+                f.write(content)
+            logger.info(f"Generated pyproject.toml with dependencies: {list(self._dependencies)}")
+        except Exception as e:
+            logger.error(f"Failed to generate pyproject.toml: {e}")
 
     def _upload_package(self) -> str:
         """Upload the package to the storage location.

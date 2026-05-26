@@ -92,9 +92,9 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
 
-        /// Python version for SDK installation
-        #[arg(long, default_value = types::DEFAULT_PYTHON_VERSION)]
-        python_version: String,
+        /// Python versions for SDK installation (can be specified multiple times)
+        #[arg(long, action = clap::ArgAction::Append)]
+        python_version: Vec<String>,
     },
 
     /// Uninstall Flame from this machine
@@ -226,7 +226,14 @@ fn main() {
                 verbose,
                 profiles,
                 force_overwrite: force,
-                python_version,
+                python_versions: if python_version.is_empty() {
+                    types::DEFAULT_PYTHON_VERSIONS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect()
+                } else {
+                    python_version
+                },
                 with_examples,
             };
             commands::install::run(config)

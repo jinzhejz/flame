@@ -137,10 +137,16 @@ impl HostShim {
 
     /// Expand environment variables in a string
     /// Supports both ${VAR} and $VAR syntax
-    fn expand_env_vars(s: &str) -> String {
-        shellexpand::env(s)
-            .unwrap_or(std::borrow::Cow::Borrowed(s))
-            .into_owned()
+    fn expand_env_vars(s: &str, envs: Option<&HashMap<String, String>>) -> String {
+        match envs {
+            Some(envs) => shellexpand::env_with_context_no_errors(s, |key| {
+                envs.get(key).cloned().or_else(|| env::var(key).ok())
+            })
+            .into_owned(),
+            None => shellexpand::env(s)
+                .unwrap_or(std::borrow::Cow::Borrowed(s))
+                .into_owned(),
+        }
     }
 
     fn launch_instance(
@@ -151,16 +157,8 @@ impl HostShim {
     ) -> Result<HostInstance, FlameError> {
         trace_fn!("HostShim::launch_instance");
 
-        // Expand environment variables in command and arguments
         let command = app.command.clone().unwrap_or_default();
-        let command = Self::expand_env_vars(&command);
-
-        let args: Vec<String> = app
-            .arguments
-            .clone()
-            .iter()
-            .map(|arg| Self::expand_env_vars(arg))
-            .collect();
+        let args = app.arguments.clone();
 
         let log_level = env::var(RUST_LOG).unwrap_or(String::from(DEFAULT_SVC_LOG_LEVEL));
 
@@ -168,7 +166,7 @@ impl HostShim {
         let mut envs: HashMap<String, String> = app
             .environments
             .iter()
-            .map(|(k, v)| (k.clone(), Self::expand_env_vars(v)))
+            .map(|(k, v)| (k.clone(), Self::expand_env_vars(v, None)))
             .collect();
         envs.insert(RUST_LOG.to_string(), log_level.clone());
         envs.insert(FLAME_LOG.to_string(), log_level);
@@ -198,10 +196,20 @@ impl HostShim {
 
         // Merge app-specific install environment variables (from appmgr)
         for (key, value) in install_env_vars {
-            envs.entry(key.clone())
-                .and_modify(|e| *e = format!("{}:{}", value, e))
-                .or_insert(value.clone());
+            if Self::is_path_env(key) {
+                envs.entry(key.clone())
+                    .and_modify(|e| *e = format!("{}:{}", value, e))
+                    .or_insert(value.clone());
+            } else {
+                envs.entry(key.clone()).or_insert(value.clone());
+            }
         }
+
+        let command = Self::expand_env_vars(&command, Some(&envs));
+        let args: Vec<String> = args
+            .iter()
+            .map(|arg| Self::expand_env_vars(arg, Some(&envs)))
+            .collect();
 
         tracing::debug!(
             "Try to start service by command <{command}> with args <{args:?}> and envs <{envs:?}>"
@@ -268,6 +276,10 @@ impl HostShim {
 
         Ok(HostInstance::new(child))
     }
+
+    fn is_path_env(key: &str) -> bool {
+        matches!(key, "PATH" | "PYTHONPATH" | "LD_LIBRARY_PATH")
+    }
 }
 
 impl Drop for HostShim {
@@ -298,5 +310,20 @@ impl Shim for HostShim {
         trace_fn!("HostShim::on_session_leave");
 
         self.instance_client.on_session_leave().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_command_args_from_launch_env() {
+        let envs = HashMap::from([("FLAME_PYTHON_VERSION".to_string(), "3.12".to_string())]);
+
+        assert_eq!(
+            HostShim::expand_env_vars("python${FLAME_PYTHON_VERSION}", Some(&envs)),
+            "python3.12"
+        );
     }
 }
