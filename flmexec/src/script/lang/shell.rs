@@ -79,9 +79,12 @@ fn shell_cmd(runtime: Option<&str>) -> Result<String, FlameError> {
         .and_then(|name| name.to_str())
         .unwrap_or(runtime);
     let supported_name = SUPPORTED_SHELLS.contains(&shell_name);
-    let supported_path = SUPPORTED_SHELLS
-        .iter()
-        .any(|shell| runtime == format!("/bin/{shell}") || runtime == format!("/usr/bin/{shell}"));
+    let supported_path = SUPPORTED_SHELLS.iter().any(|&shell| {
+        runtime.strip_prefix("/bin/").is_some_and(|s| s == shell)
+            || runtime
+                .strip_prefix("/usr/bin/")
+                .is_some_and(|s| s == shell)
+    });
     if !supported_name || (runtime.contains('/') && !supported_path) {
         return Err(FlameError::InvalidConfig(format!(
             "Unsupported shell runtime: {runtime}"
