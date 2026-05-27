@@ -99,13 +99,13 @@ class Counter:
         return self._count
 
 with Runner("counter-app") as runner:
-    counter = runner.service(Counter(10), stateful=True, warmup=1)
+    counter = runner.service(Counter(10), warmup=1)
     counter.add(1).wait()
     counter.add(3).wait()
     print(counter.get().get())
 ```
 
-Classes and instances default to fixed sessions. Passing `warmup=N` with `autoscale=False` creates `N` fixed instances. Use `stateful=True` only with instances, not classes.
+Functions, builtins, and classes are stateless. Object instances are stateful fixed services and support only `warmup=0` or `warmup=1`.
 
 ### Passing ObjectFuture Values
 
@@ -144,7 +144,7 @@ Runner(name: str, fail_if_exists: bool = False)
 
 Methods:
 
-- `service(execution_object, stateful=None, autoscale=None, warmup=0, resreq=None)`: create a `RunnerService`.
+- `service(execution_object, autoscale=None, warmup=0, resreq=None)`: create a `RunnerService`.
 - `get(futures)`: resolve multiple `ObjectFuture` values to concrete objects.
 - `ref(futures)`: resolve multiple `ObjectFuture` values to `ObjectRef` values.
 - `wait(futures)`: wait for multiple futures without fetching objects.
@@ -173,13 +173,15 @@ with Runner("cpu-app") as runner:
 - Every remote call returns `ObjectFuture`.
 - `close()` closes the underlying Flame session.
 
-Default scaling behavior:
+Default service behavior with `warmup=0`:
 
-| Execution object | Default `autoscale` | Default `stateful` |
-|------------------|---------------------|--------------------|
-| Function | `True` | `False` |
-| Class | `False` | `False` |
-| Instance | `False` | `False` |
+| Execution object | Default `stateful` | Default `autoscale` | Effective `min_instances` | Effective `max_instances` |
+|------------------|--------------------|---------------------|---------------------------|---------------------------|
+| Function or builtin | `False` | `True` | `0` | unlimited |
+| Class | `False` | `True` | `0` | unlimited |
+| Instance | `True` | `False` | `1` | `1` |
+
+For functions, builtins, and classes, `autoscale` is configurable. When `warmup=N` and `N > 0`, autoscaled services use `min_instances=N` and no max limit; fixed services use `min_instances=N` and `max_instances=N`. Object instances are always fixed, always stateful, and reject `warmup` values other than `0` or `1`.
 
 ### ObjectFuture
 

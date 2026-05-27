@@ -434,6 +434,120 @@ def test_runnerservice_does_not_overwrite_close_with_user_method():
     rs._session.close.assert_called_once()
 
 
+def test_runner_context_defaults_by_execution_object():
+    """Test RunnerContext default stateful/autoscale/warmup values by execution object type."""
+    import functools
+
+    def sample_func(x=0):
+        return x
+
+    class SampleService:
+        def method(self):
+            return "ok"
+
+    contexts = [
+        RunnerContext(sample_func),
+        RunnerContext(functools.partial(sample_func, x=1)),
+        RunnerContext(len),
+        RunnerContext(SampleService),
+        RunnerContext(SampleService, autoscale=False, warmup=2),
+        RunnerContext(SampleService()),
+        RunnerContext(SampleService(), warmup=1),
+    ]
+
+    assert [(ctx.stateful, ctx.autoscale, ctx.warmup, ctx.min_instances, ctx.max_instances) for ctx in contexts] == [
+        (False, True, 0, 0, None),
+        (False, True, 0, 0, None),
+        (False, True, 0, 0, None),
+        (False, True, 0, 0, None),
+        (False, False, 2, 2, 2),
+        (True, False, 0, 1, 1),
+        (True, False, 1, 1, 1),
+    ]
+
+
+def test_runner_service_passes_public_options(monkeypatch):
+    """Test Runner.service forwards only public options to RunnerService."""
+    from flamepy.runner.runner import Runner
+
+    calls = []
+
+    class FakeRunnerService:
+        def __init__(self, app, execution_object, autoscale=None, warmup=0, resreq=None):
+            calls.append((app, execution_object, autoscale, warmup, resreq))
+
+    def sample_func():
+        return "ok"
+
+    runner = object.__new__(Runner)
+    runner._name = "test-runner-service-options"
+    runner._services = []
+    resreq = object()
+
+    monkeypatch.setattr("flamepy.runner.runner.RunnerService", FakeRunnerService)
+
+    runner.service(sample_func, autoscale=False, warmup=2, resreq=resreq)
+
+    assert calls == [("test-runner-service-options", sample_func, False, 2, resreq)]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"autoscale": True}, "always fixed"),
+        ({"warmup": 2}, "only support warmup=0 or warmup=1"),
+    ],
+)
+def test_runner_service_rejects_unsupported_options(kwargs, message):
+    """Test Runner.service rejects unsupported object autoscale/warmup combinations."""
+    from flamepy.runner.runner import Runner
+
+    runner = object.__new__(Runner)
+    runner._name = "test-runner-invalid-defaults"
+    runner._services = []
+
+    with pytest.raises(ValueError, match=message):
+        runner.service(object(), **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("execution_object", "kwargs", "message"),
+    [
+        (lambda: None, {"stateful": True}, "always stateless"),
+        (str, {"stateful": True}, "always stateless"),
+        (object(), {"stateful": False}, "always stateful"),
+        (object(), {"autoscale": True}, "always fixed"),
+        (object(), {"warmup": 2}, "only support warmup=0 or warmup=1"),
+        (lambda: None, {"warmup": -1}, "warmup must be a non-negative integer"),
+    ],
+)
+def test_runner_context_rejects_unsupported_options(execution_object, kwargs, message):
+    """Test RunnerContext rejects unsupported stateful/autoscale/warmup combinations."""
+    with pytest.raises(ValueError, match=message):
+        RunnerContext(execution_object, **kwargs)
+
+
+def test_runner_service_does_not_expose_stateful():
+    """Test Runner.service derives statefulness instead of exposing it."""
+    import inspect
+
+    from flamepy.runner.runner import Runner
+
+    assert "stateful" not in inspect.signature(Runner.service).parameters
+
+
+def test_runner_service_rejects_stateful_keyword():
+    """Test removed public stateful option fails as an unsupported keyword."""
+    from flamepy.runner.runner import Runner
+
+    runner = object.__new__(Runner)
+    runner._name = "test-runner-stateful-keyword"
+    runner._services = []
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'stateful'"):
+        runner.service(object(), stateful=True)
+
+
 def test_runpy_resolves_object_ref_to_cached_none():
     """Test cached None is a valid ObjectRef value, not a retrieval miss."""
     from flamepy.core.cache import ObjectRef
@@ -610,14 +724,14 @@ class TestRunnerContext:
         ctx = RunnerContext(execution_object=instance, stateful=True)
         assert ctx.stateful is True
 
-    def test_runner_context_stateful_with_function(self):
-        """Test RunnerContext stateful=True is allowed for functions."""
+    def test_runner_context_stateful_with_function_raises(self):
+        """Test RunnerContext rejects stateful=True for functions."""
 
         def my_func():
             pass
 
-        ctx = RunnerContext(execution_object=my_func, stateful=True)
-        assert ctx.stateful is True
+        with pytest.raises(ValueError, match="always stateless"):
+            RunnerContext(execution_object=my_func, stateful=True)
 
     def test_runner_context_stateful_with_class_raises(self):
         """Test RunnerContext stateful=True raises for classes."""
@@ -625,7 +739,7 @@ class TestRunnerContext:
         class MyClass:
             pass
 
-        with pytest.raises(ValueError, match="Cannot set stateful=True for a class"):
+        with pytest.raises(ValueError, match="always stateless"):
             RunnerContext(execution_object=MyClass, stateful=True)
 
     def test_runner_context_stateful_false_with_class(self):

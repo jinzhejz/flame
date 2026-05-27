@@ -288,17 +288,20 @@ class RecursiveService:
     using the open_session API.
     """
 
-    def __init__(self, session_id: str, app_name: str):
+    _session_context: Optional[SessionContext] = None
+
+    def __init__(self, session_id: Optional[str] = None, app_name: Optional[str] = None):
         """Initialize with session ID and app name for recursive calls.
 
         Args:
             session_id: The shared session ID for recursive calls.
             app_name: The shared application name for Runner.
         """
-        self._session_context = SessionContext(
-            session_id=session_id,
-            application_name=app_name,
-        )
+        if session_id is not None and app_name is not None:
+            self._session_context = SessionContext(
+                session_id=session_id,
+                application_name=app_name,
+            )
 
     def compute_recursive(self, depth: int) -> int:
         """Compute recursively by creating new Runner and service instances.
@@ -312,6 +315,9 @@ class RecursiveService:
         logger = logging.getLogger(__name__)
 
         logger.info(f"[RecursiveService] compute_recursive called with depth={depth}")
+        if self._session_context is None:
+            raise ValueError("RecursiveService requires _session_context")
+
         logger.info(f"[RecursiveService] session_context: session_id={self._session_context.session_id}, app_name={self._session_context.application_name}")
 
         if depth <= 0:
@@ -326,11 +332,12 @@ class RecursiveService:
             with Runner(self._session_context.application_name) as inner_runner:
                 logger.info(f"[RecursiveService] Inner Runner created, _app_registered={inner_runner._app_registered}")
 
-                # Create service using Runner.service() with self
+                # Create service using Runner.service() with the class
                 # This reuses the existing session via _session_context
-                # Use autoscale=True to allow multiple executors for recursive calls
-                logger.info("[RecursiveService] Creating inner service with self")
-                inner_service = inner_runner.service(self, autoscale=True)
+                # Use a class service with autoscale=True to allow multiple
+                # executors for recursive calls.
+                logger.info("[RecursiveService] Creating inner service with class")
+                inner_service = inner_runner.service(type(self), autoscale=True)
                 logger.info(f"[RecursiveService] Inner service created, session_id={inner_service._session.id}")
 
                 # Call the inner service recursively

@@ -132,8 +132,7 @@ class RunnerService:
         self,
         app: str,
         execution_object: Any,
-        stateful: bool = False,
-        autoscale: bool = True,
+        autoscale: Optional[bool] = None,
         warmup: int = 0,
         resreq: Optional[ResourceRequirement] = None,
     ):
@@ -147,13 +146,13 @@ class RunnerService:
                              or function. If the object has a `_session_context`
                              attribute of type SessionContext, its session_id
                              will be used instead of auto-generating one.
-            stateful: If True, persist the execution object state back to flame-cache
-                     after each task. If False, do not persist state.
-            autoscale: If True, create instances dynamically based on pending tasks
-                      (min=warmup or 0, max=None). If False, create a fixed number
-                      of instances (min=max=warmup or 1).
+            autoscale: For functions, builtins, and classes, whether to create
+                      instances dynamically based on pending tasks. Defaults to
+                      True for those service types. Object instances are always
+                      fixed and cannot autoscale.
             warmup: Number of instances to pre-create at session start. When
-                    autoscale=False, this sets the fixed instance count.
+                    autoscale=False, this sets the fixed instance count. Object
+                    instances only support warmup values 0 and 1.
             resreq: Optional explicit resource requirements. When omitted, the
                     server applies cluster.resource_requirement (or a hardcoded
                     fallback when that is unset).
@@ -179,12 +178,12 @@ class RunnerService:
         # Create a session with flamepy.runner.runpy service
         # For RL module: serialize RunnerContext with cloudpickle, put in cache to get ObjectRef,
         # then encode ObjectRef to bytes for core API
-        runner_context = RunnerContext(execution_object=execution_object, stateful=stateful, autoscale=autoscale, warmup=warmup)
+        runner_context = RunnerContext(execution_object=execution_object, autoscale=autoscale, warmup=warmup)
         # Serialize the context using cloudpickle
         serialized_ctx = cloudpickle.dumps(runner_context, protocol=cloudpickle.DEFAULT_PROTOCOL)
         # Put in cache with <app>/<session_id> key prefix
         key_prefix = f"{app}/{session_id}"
-        logger.debug(f"[RunnerService] Putting RunnerContext in cache: key_prefix={key_prefix}, stateful={stateful}, autoscale={autoscale}")
+        logger.debug(f"[RunnerService] Putting RunnerContext in cache: key_prefix={key_prefix}, stateful={runner_context.stateful}, autoscale={runner_context.autoscale}")
         object_ref = put_object(key_prefix, serialized_ctx)
         logger.debug(f"[RunnerService] RunnerContext cached: key={object_ref.key}, version={object_ref.version}")
         # Encode ObjectRef to bytes for core API
@@ -564,7 +563,6 @@ class Runner:
     def service(
         self,
         execution_object: Any,
-        stateful: Optional[bool] = None,
         autoscale: Optional[bool] = None,
         warmup: int = 0,
         resreq: Optional[ResourceRequirement] = None,
@@ -573,15 +571,13 @@ class Runner:
 
         Args:
             execution_object: A function, class, or class instance to expose as a service
-            stateful: If True, persist the execution object state back to flame-cache
-                     after each task. If False, do not persist state. If None, use default
-                     based on execution_object type (default: False for all types).
-            autoscale: If True, create instances dynamically based on pending tasks
-                      (min=warmup or 0, max=None). If False, create a fixed number
-                      of instances (min=max=warmup or 1).
-                      If None, use default based on execution_object type.
+            autoscale: Functions, builtins, and classes can autoscale; their default
+                      is True. Object instances are fixed and cannot autoscale.
             warmup: Number of instances to pre-create at session start. When
-                   autoscale=False, this sets the fixed instance count. Default: 0.
+                   autoscale=False, this sets the fixed instance count. With
+                   warmup=0, fixed services create one instance and autoscaled
+                   services start from zero. Object instances only support warmup
+                   values 0 and 1. Default: 0.
             resreq: Optional explicit resource requirements. When omitted, the
                     server applies cluster.resource_requirement (or a hardcoded
                     fallback when that is unset).
@@ -590,29 +586,14 @@ class Runner:
             A RunnerService instance
 
         Raises:
-            ValueError: If stateful=True is set for a class (only instances can be stateful)
+            ValueError: If the requested stateful/autoscale/warmup combination is
+                not supported for the execution object type.
         """
-        is_function = callable(execution_object) and not inspect.isclass(execution_object)
-        is_class = inspect.isclass(execution_object)
-
-        if stateful is None:
-            stateful = False
-
-        if autoscale is None:
-            if is_function:
-                autoscale = True
-            else:
-                autoscale = False
-
-        if stateful and is_class:
-            raise ValueError("Cannot set stateful=True for a class. Classes themselves cannot maintain state; only instances can. Pass an instance instead, or set stateful=False.")
-
-        logger.debug(f"Creating service for {type(execution_object).__name__} (stateful={stateful}, autoscale={autoscale}, warmup={warmup})")
+        logger.debug(f"Creating service for {type(execution_object).__name__} (autoscale={autoscale}, warmup={warmup})")
 
         runner_service = RunnerService(
             self._name,
             execution_object,
-            stateful=stateful,
             autoscale=autoscale,
             warmup=warmup,
             resreq=resreq,
