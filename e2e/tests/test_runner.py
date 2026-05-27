@@ -104,8 +104,8 @@ def test_runner_with_instance(check_package_config, check_flmrun_app):
         # Set initial count to 10 by adding 10
         counter.add(10)
 
-        # Create a stateful service with the instance
-        cnt_os = rr.service(counter, stateful=True, autoscale=False)
+        # Instance services are stateful and fixed by default.
+        cnt_os = rr.service(counter)
 
         # Apply state changes sequentially so the expected total is deterministic.
         cnt_os.increment().wait()
@@ -124,8 +124,8 @@ def test_runner_with_objectfuture_args(check_package_config, check_flmrun_app):
         counter = Counter()
         counter.add(10)
 
-        # Create a stateful service with the instance
-        cnt_os = rr.service(counter, stateful=True, autoscale=False)
+        # Instance services are stateful and fixed by default.
+        cnt_os = rr.service(counter)
 
         # Apply state changes sequentially so ObjectFuture chaining starts from
         # a deterministic counter value.
@@ -284,13 +284,13 @@ def test_runner_error_no_storage_config():
 
 
 def test_runner_stateful_instance(check_package_config, check_flmrun_app):
-    """Test Case 14: Test Runner with stateful=True for instance."""
+    """Test Case 14: Test Runner with default stateful instance."""
     with runner.Runner("test-runner-stateful") as rr:
         # Create a Counter instance
         counter = Counter()
 
-        # Create a stateful service (state should persist across tasks)
-        cnt_service = rr.service(counter, stateful=True, autoscale=False)
+        # Instance services are stateful by default.
+        cnt_service = rr.service(counter)
 
         # Call methods
         cnt_service.add(5).wait()
@@ -306,7 +306,7 @@ def test_runner_stateless_function(check_package_config, check_flmrun_app):
     """Test Case 15: Test Runner with stateless function (default behavior)."""
     with runner.Runner("test-runner-stateless-func") as rr:
         # Create a service with a function (stateless by default)
-        sum_service = rr.service(sum_func, stateful=False, autoscale=True)
+        sum_service = rr.service(sum_func)
 
         # Call the function multiple times
         results = [sum_service(i, i + 1) for i in range(5)]
@@ -321,7 +321,7 @@ def test_runner_class_single_instance(check_package_config, check_flmrun_app):
     """Test Case 16: Test Runner with class and autoscale=False (single instance)."""
     with runner.Runner("test-runner-class-single") as rr:
         # Create a service with a class, single instance mode
-        calc_service = rr.service(Calculator, stateful=False, autoscale=False)
+        calc_service = rr.service(Calculator, autoscale=False)
 
         # Call methods
         result1 = calc_service.add(10, 5)
@@ -331,14 +331,14 @@ def test_runner_class_single_instance(check_package_config, check_flmrun_app):
         assert values == [15, 12], f"Expected [15, 12], got {values}"
 
 
-def test_runner_error_stateful_class(check_package_config, check_flmrun_app):
-    """Test Case 17: Test that stateful=True raises error for class."""
-    with runner.Runner("test-runner-stateful-class-error") as rr:
-        # Trying to create a stateful service with a class should raise ValueError
+def test_runner_error_object_autoscale(check_package_config, check_flmrun_app):
+    """Test Case 17: Test that object instances cannot autoscale."""
+    with runner.Runner("test-runner-object-autoscale-error") as rr:
+        # Object instance services are always fixed.
         with pytest.raises(ValueError) as exc_info:
-            rr.service(Counter, stateful=True)
+            rr.service(Counter(), autoscale=True)
 
-        assert "Cannot set stateful=True for a class" in str(exc_info.value)
+        assert "always fixed" in str(exc_info.value)
 
 
 def test_runner_defaults_function(check_package_config, check_flmrun_app):
@@ -354,9 +354,9 @@ def test_runner_defaults_function(check_package_config, check_flmrun_app):
 
 
 def test_runner_defaults_class(check_package_config, check_flmrun_app):
-    """Test Case 19: Test default parameters for class (stateful=False, autoscale=False)."""
+    """Test Case 19: Test default parameters for class (stateful=False, autoscale=True)."""
     with runner.Runner("test-runner-defaults-class") as rr:
-        # Create service with class using defaults (should be stateful=False, autoscale=False)
+        # Create service with class using defaults (should be stateful=False, autoscale=True)
         calc_service = rr.service(Calculator)
 
         # Use a stateless method because class services cannot be stateful.
@@ -367,20 +367,19 @@ def test_runner_defaults_class(check_package_config, check_flmrun_app):
 
 
 def test_runner_defaults_instance(check_package_config, check_flmrun_app):
-    """Test Case 20: Test default parameters for instance (stateful=False, autoscale=False)."""
+    """Test Case 20: Test default parameters for instance (stateful=True, autoscale=False)."""
     with runner.Runner("test-runner-defaults-instance") as rr:
-        # Create an instance
-        calc = Calculator()
+        counter = Counter()
 
-        # Create service with instance using defaults (should be stateful=False, autoscale=False)
-        calc_service = rr.service(calc)
+        # Create service with instance using defaults (should be stateful=True, autoscale=False)
+        counter_service = rr.service(counter)
 
-        # Call methods
-        result1 = calc_service.add(5, 3)
-        result2 = calc_service.subtract(10, 4)
+        counter_service.add(5).wait()
+        counter_service.increment().wait()
+        result = counter_service.get_count()
 
-        values = rr.get([result1, result2])
-        assert values == [8, 6], f"Expected [8, 6], got {values}"
+        value = result.get()
+        assert value == 6, f"Expected 6, got {value}"
 
 
 def test_runner_auto_start(check_package_config, check_flmrun_app):
@@ -715,26 +714,28 @@ def test_runner_recursive_same_session(check_package_config, check_flmrun_app):
     """
     import logging
     import time
+    import uuid
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
     # Shared application name and session ID
-    shared_app_name = "test-runner-recursive"
-    shared_session_id = "recursive-session-001"
+    recursive_suffix = uuid.uuid4().hex[:8]
+    shared_app_name = f"test-runner-recursive-{recursive_suffix}"
+    shared_session_id = f"recursive-session-{recursive_suffix}"
 
     logger.info(f"[TEST] Starting recursive test: app={shared_app_name}, session={shared_session_id}")
 
-    # Create an instance with the shared session ID and app name
-    recursive_instance = RecursiveService(
-        session_id=shared_session_id,
-        app_name=shared_app_name,
-    )
+    class RecursiveTestService(RecursiveService):
+        _session_context = SessionContext(
+            session_id=shared_session_id,
+            application_name=shared_app_name,
+        )
 
     with runner.Runner(shared_app_name) as rr:
         # Use autoscale=True to allow multiple executors for recursive calls
         # Without autoscale, a single executor would deadlock waiting for its own recursive task
-        service = rr.service(recursive_instance, autoscale=True)
+        service = rr.service(RecursiveTestService, autoscale=True)
         logger.info(f"[TEST] Service created, session_id={service._session.id}")
 
         # Verify the session ID matches
@@ -1123,7 +1124,7 @@ class TestTaskChaining:
         """Test sequential task chaining where output of one task feeds into next."""
         with runner.Runner("test-drf-chain-seq") as rr:
             counter = Counter()
-            cnt_service = rr.service(counter, stateful=True, autoscale=False)
+            cnt_service = rr.service(counter)
 
             cnt_service.add(10).wait()
             cnt_service.add(5).wait()
@@ -1137,7 +1138,7 @@ class TestTaskChaining:
         """Test chaining using ObjectFuture as argument to next task."""
         with runner.Runner("test-drf-chain-objfuture") as rr:
             counter = Counter()
-            cnt_service = rr.service(counter, stateful=True, autoscale=False)
+            cnt_service = rr.service(counter)
 
             cnt_service.add(10).wait()
             intermediate = cnt_service.get_count()
@@ -1279,7 +1280,7 @@ class TestDRFStatefulServices:
         """Test stateful counter with multiple operations."""
         with runner.Runner("test-drf-stateful-counter") as rr:
             counter = Counter()
-            cnt_service = rr.service(counter, stateful=True, autoscale=False)
+            cnt_service = rr.service(counter)
 
             cnt_service.add(100).wait()
             cnt_service.increment().wait()
@@ -1296,8 +1297,8 @@ class TestDRFStatefulServices:
             counter1 = Counter()
             counter2 = Counter()
 
-            svc1 = rr.service(counter1, stateful=True, autoscale=False)
-            svc2 = rr.service(counter2, stateful=True, autoscale=False)
+            svc1 = rr.service(counter1)
+            svc2 = rr.service(counter2)
 
             svc1.add(10).wait()
             svc1.increment().wait()

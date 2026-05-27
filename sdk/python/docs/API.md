@@ -178,7 +178,7 @@ with Runner("add-app") as runner:
 Key classes and helpers:
 
 - `Runner(name, fail_if_exists=False)`
-- `Runner.service(execution_object, stateful=None, autoscale=None, warmup=0, resreq=None)`
+- `Runner.service(execution_object, autoscale=None, warmup=0, resreq=None)`
 - `Runner.get(futures)`, `Runner.ref(futures)`, `Runner.wait(futures)`, `Runner.select(futures)`
 - `ObjectFuture.get()`, `ObjectFuture.ref()`, `ObjectFuture.wait()`
 - `get_data(data)` for decoding Runner task input/output payloads

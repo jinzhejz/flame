@@ -74,30 +74,50 @@ class RunnerContext:
 
     Attributes:
         execution_object: The execution object for the customized session.
-        stateful: If True, persist the execution object state back to flame-cache after each task.
+        stateful: Derived from execution_object type unless explicitly provided.
+                  Object instances are always stateful. Functions, builtins, and
+                  classes are always stateless.
         autoscale: If True, create instances dynamically (min=warmup or 0, max=None).
-                   If False, create fixed instances (min=max=warmup or 1).
+                   If False, create fixed instances (min=max=warmup or 1). Object
+                   instances are always fixed.
         warmup: Number of instances to pre-create. When autoscale=True, sets min_instances.
                 When autoscale=False, sets both min_instances and max_instances.
+                Object instances only support warmup values 0 and 1.
         min_instances: Minimum number of instances (computed from autoscale and warmup)
         max_instances: Maximum number of instances (computed from autoscale and warmup)
     """
 
     execution_object: Any
-    stateful: bool = False
-    autoscale: bool = True
+    stateful: Optional[bool] = None
+    autoscale: Optional[bool] = None
     warmup: int = 0
     min_instances: int = field(init=False, repr=False)
     max_instances: Optional[int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Compute min/max instances and validate configuration."""
+        is_function = inspect.isroutine(self.execution_object)
+        is_class = inspect.isclass(self.execution_object)
+        is_object = not is_function and not is_class
+
+        if is_object:
+            if self.stateful is False:
+                raise ValueError("Object instance services are always stateful. Omit stateful or pass stateful=True.")
+            if self.autoscale is True:
+                raise ValueError("Object instance services are always fixed. Omit autoscale or pass autoscale=False.")
+            if self.warmup not in (0, 1):
+                raise ValueError("Object instance services only support warmup=0 or warmup=1.")
+            self.stateful = True
+            self.autoscale = False
+        else:
+            if self.stateful is True:
+                raise ValueError("Functions, builtins, and classes are always stateless. Omit stateful or pass stateful=False.")
+            self.stateful = False
+            self.autoscale = True if self.autoscale is None else self.autoscale
+
         default_min = 0 if self.autoscale else 1
         self.min_instances = self.warmup if self.warmup > 0 else default_min
         self.max_instances = None if self.autoscale else self.min_instances
-
-        if self.stateful and inspect.isclass(self.execution_object):
-            raise ValueError("Cannot set stateful=True for a class. Classes themselves cannot maintain state; only instances can. Pass an instance instead, or set stateful=False.")
 
 
 @dataclass
