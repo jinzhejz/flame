@@ -29,15 +29,19 @@ use crate::api::Script;
 use crate::script::{ScriptEngine, ScriptRuntime};
 
 const DEFAULT_ENTRYPOINT: &str = "main.sh";
-const SHELL_CMD: &str = "/bin/bash";
+const DEFAULT_SHELL_CMD: &str = "bash";
+const SUPPORTED_SHELLS: &[&str] = &["sh", "bash", "zsh", "csh", "tcsh", "ksh", "fish"];
 
 pub struct ShellScript {
     runtime: ScriptRuntime,
+    shell_cmd: String,
 }
 
 impl ShellScript {
     pub fn new(script: &Script) -> Result<Self, FlameError> {
         trace_fn!("ShellScript::new");
+
+        let shell_cmd = shell_cmd(script.runtime.as_deref())?;
 
         let mut rng = rand::rng();
         let work_dir_path = format!("/tmp/flame/script/shell-{}", rng.random::<u32>());
@@ -61,9 +65,33 @@ impl ShellScript {
             input: script.input.clone(),
             env: HashMap::new(),
         };
-
-        Ok(Self { runtime })
+        Ok(Self { runtime, shell_cmd })
     }
+}
+
+fn shell_cmd(runtime: Option<&str>) -> Result<String, FlameError> {
+    let Some(runtime) = runtime.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(DEFAULT_SHELL_CMD.to_string());
+    };
+
+    let shell_name = Path::new(runtime)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(runtime);
+    let supported_name = SUPPORTED_SHELLS.contains(&shell_name);
+    let supported_path = SUPPORTED_SHELLS.iter().any(|&shell| {
+        runtime.strip_prefix("/bin/").is_some_and(|s| s == shell)
+            || runtime
+                .strip_prefix("/usr/bin/")
+                .is_some_and(|s| s == shell)
+    });
+    if !supported_name || (runtime.contains('/') && !supported_path) {
+        return Err(FlameError::InvalidConfig(format!(
+            "Unsupported shell runtime: {runtime}"
+        )));
+    }
+
+    Ok(runtime.to_string())
 }
 
 impl ScriptEngine for ShellScript {
@@ -72,8 +100,9 @@ impl ScriptEngine for ShellScript {
 
         tracing::debug!("Running script: {}", self.runtime.entrypoint);
         tracing::debug!("Work directory: {}", self.runtime.work_dir);
+        tracing::debug!("Using shell runtime: {}", self.shell_cmd);
 
-        let mut child = Command::new(SHELL_CMD)
+        let mut child = Command::new(&self.shell_cmd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .current_dir(&self.runtime.work_dir)
@@ -127,5 +156,29 @@ impl Drop for ShellScript {
         trace_fn!("ShellScript::drop");
 
         fs::remove_dir_all(Path::new(&self.runtime.work_dir)).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uses_default_shell_when_runtime_is_not_requested() {
+        assert_eq!(shell_cmd(None).unwrap(), DEFAULT_SHELL_CMD);
+        assert_eq!(shell_cmd(Some("")).unwrap(), DEFAULT_SHELL_CMD);
+    }
+
+    #[test]
+    fn accepts_supported_shell_runtime() {
+        assert_eq!(shell_cmd(Some("zsh")).unwrap(), "zsh");
+        assert_eq!(shell_cmd(Some("/bin/csh")).unwrap(), "/bin/csh");
+    }
+
+    #[test]
+    fn rejects_unsupported_shell_runtime() {
+        assert!(shell_cmd(Some("python")).is_err());
+        assert!(shell_cmd(Some("/tmp/bash")).is_err());
+        assert!(shell_cmd(Some("/tmp/custom-shell")).is_err());
     }
 }

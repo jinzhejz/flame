@@ -19,6 +19,10 @@ tools = [
                         "type": "string",
                         "description": "The code of the script to run, e.g. print('Hello, world!')",
                     },
+                    "runtime": {
+                        "type": "string",
+                        "description": "The runtime for the selected language, e.g. Python version or shell type",
+                    },
                 },
                 "required": ["language", "code"],
             },

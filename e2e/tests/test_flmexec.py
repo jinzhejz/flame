@@ -40,10 +40,10 @@ def check_flmexec_runner_environment():
         pytest.skip(f"Flame cluster is not available: {exc}")
 
 
-def _invoke_flmexec_python(script: str) -> str:
+def _invoke_flmexec_python(script: str, runtime: str | None = None) -> str:
     session = flamepy.create_session("flmexec")
     try:
-        request = {"language": "python", "code": script, "input": None}
+        request = {"language": "python", "runtime": runtime, "code": script, "input": None}
         raw_response = session.invoke(json.dumps(request).encode("utf-8"))
     finally:
         session.close()

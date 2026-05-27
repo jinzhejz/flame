@@ -38,6 +38,9 @@ struct Cli {
     /// The language of the code
     #[arg(short, long, default_value = "shell", value_parser = parse_language)]
     language: String,
+    /// The runtime for the selected language, e.g. Python version or shell type
+    #[arg(short, long)]
+    runtime: Option<String>,
     /// The input to the code slice
     #[arg(short, long)]
     input: Option<Vec<u8>>,
@@ -71,6 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let script = Script {
         language: cli.language.clone(),
+        runtime: cli.runtime.clone(),
         code: cli.code.clone(),
         input: cli.input.clone(),
     };

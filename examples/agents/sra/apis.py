@@ -20,3 +20,4 @@ class WebPage:
 class Script:
     language: str
     code: str
+    runtime: str | None = None
