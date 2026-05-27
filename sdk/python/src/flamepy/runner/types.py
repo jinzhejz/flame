@@ -96,7 +96,10 @@ class RunnerContext:
 
     def __post_init__(self) -> None:
         """Compute min/max instances and validate configuration."""
-        is_function = inspect.isroutine(self.execution_object)
+        if self.warmup < 0:
+            raise ValueError("warmup must be a non-negative integer.")
+
+        is_function = callable(self.execution_object) and not inspect.isclass(self.execution_object)
         is_class = inspect.isclass(self.execution_object)
         is_object = not is_function and not is_class
 

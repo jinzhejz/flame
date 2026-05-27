@@ -436,8 +436,10 @@ def test_runnerservice_does_not_overwrite_close_with_user_method():
 
 def test_runner_context_defaults_by_execution_object():
     """Test RunnerContext default stateful/autoscale/warmup values by execution object type."""
-    def sample_func():
-        return "ok"
+    import functools
+
+    def sample_func(x=0):
+        return x
 
     class SampleService:
         def method(self):
@@ -445,6 +447,7 @@ def test_runner_context_defaults_by_execution_object():
 
     contexts = [
         RunnerContext(sample_func),
+        RunnerContext(functools.partial(sample_func, x=1)),
         RunnerContext(len),
         RunnerContext(SampleService),
         RunnerContext(SampleService, autoscale=False, warmup=2),
@@ -453,6 +456,7 @@ def test_runner_context_defaults_by_execution_object():
     ]
 
     assert [(ctx.stateful, ctx.autoscale, ctx.warmup, ctx.min_instances, ctx.max_instances) for ctx in contexts] == [
+        (False, True, 0, 0, None),
         (False, True, 0, 0, None),
         (False, True, 0, 0, None),
         (False, True, 0, 0, None),
@@ -514,6 +518,7 @@ def test_runner_service_rejects_unsupported_options(kwargs, message):
         (object(), {"stateful": False}, "always stateful"),
         (object(), {"autoscale": True}, "always fixed"),
         (object(), {"warmup": 2}, "only support warmup=0 or warmup=1"),
+        (lambda: None, {"warmup": -1}, "warmup must be a non-negative integer"),
     ],
 )
 def test_runner_context_rejects_unsupported_options(execution_object, kwargs, message):
