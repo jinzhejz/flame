@@ -17,6 +17,8 @@ use serde_derive::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, FlameMessage)]
 pub struct Script {
     pub language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
     pub code: String,
     pub input: Option<Vec<u8>>,
 }
@@ -24,4 +26,37 @@ pub struct Script {
 #[derive(Debug, Clone, Serialize, Deserialize, FlameMessage)]
 pub struct ScriptOutput {
     pub data: Vec<u8>,
+}
+
+#[cfg(test)]
+mod tests {
+    use flame_rs::FlameMessage;
+
+    use super::*;
+
+    #[test]
+    fn decodes_request_without_runtime() {
+        let script =
+            Script::decode(br#"{"language":"python","code":"print(1)","input":null}"#).unwrap();
+
+        assert_eq!(script.language, "python");
+        assert_eq!(script.runtime, None);
+        assert_eq!(script.code, "print(1)");
+        assert_eq!(script.input, None);
+    }
+
+    #[test]
+    fn encodes_request_runtime_when_present() {
+        let script = Script {
+            language: "shell".to_string(),
+            runtime: Some("zsh".to_string()),
+            code: "echo ok".to_string(),
+            input: None,
+        };
+
+        let encoded = script.encode().unwrap();
+        let encoded = String::from_utf8(encoded.to_vec()).unwrap();
+
+        assert!(encoded.contains(r#""runtime":"zsh""#));
+    }
 }
