@@ -23,12 +23,13 @@ use std::{
 
 use rand::Rng;
 
-use flame_rs::{apis::FlameError, DEFAULT_PYTHON_VERSION, FLAME_PYTHON_VERSION_ENV};
+use flame_rs::{apis::FlameError, FLAME_PYTHON_VERSION_ENV};
 use stdng::trace_fn;
 
 use crate::api::Script;
 use crate::script::{ScriptEngine, ScriptRuntime};
 
+const DEFAULT_PYTHON_VERSION: &str = "3.12";
 const DEFAULT_ENTRYPOINT: &str = "main.py";
 const DEFAULT_FLAME_HOME: &str = "/usr/local/flame";
 const PYTHONPATH_ENV: &str = "PYTHONPATH";
