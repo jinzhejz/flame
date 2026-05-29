@@ -1,46 +1,6 @@
 name: Flame Kubernetes E2E
 
-"on":
-  pull_request:
-    paths:
-      - ".github/workflows/e2e-k8s.yaml"
-      - "charts/flame/**"
-      - "ci/k8s/**"
-      - "ci/kind.yaml"
-      - "common/**"
-      - "docker/**"
-      - "executor_manager/**"
-      - "flmctl/**"
-      - "flmexec/**"
-      - "flmping/**"
-      - "object_cache/**"
-      - "rpc/**"
-      - "sdk/**"
-      - "session_manager/**"
-      - "Cargo.lock"
-      - "Cargo.toml"
-  push:
-    branches:
-      - main
-      - release-*
-    paths:
-      - ".github/workflows/e2e-k8s.yaml"
-      - "charts/flame/**"
-      - "ci/k8s/**"
-      - "ci/kind.yaml"
-      - "common/**"
-      - "docker/**"
-      - "executor_manager/**"
-      - "flmctl/**"
-      - "flmexec/**"
-      - "flmping/**"
-      - "object_cache/**"
-      - "rpc/**"
-      - "sdk/**"
-      - "session_manager/**"
-      - "Cargo.lock"
-      - "Cargo.toml"
-  workflow_dispatch:
+on: [push, pull_request, workflow_dispatch]
 
 permissions:
   contents: read

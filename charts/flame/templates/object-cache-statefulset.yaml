@@ -62,6 +62,10 @@ spec:
             tcpSocket:
               port: flight
             periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: flight
+            periodSeconds: 10
           volumeMounts:
             - name: config
               mountPath: /usr/local/flame/conf/flame-cluster.yaml

@@ -90,6 +90,12 @@ SESSION_SERVICE="$(kubectl -n "$NAMESPACE" get service \
 CACHE_SERVICE="$(kubectl -n "$NAMESPACE" get service \
     -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=object-cache" \
     -o jsonpath='{.items[0].metadata.name}')"
+SESSION_FRONTEND_PORT="$(kubectl -n "$NAMESPACE" get service "$SESSION_SERVICE" \
+    -o jsonpath='{.spec.ports[?(@.name=="frontend")].port}')"
+CACHE_FLIGHT_PORT="$(kubectl -n "$NAMESPACE" get service "$CACHE_SERVICE" \
+    -o jsonpath='{.spec.ports[?(@.name=="flight")].port}')"
+: "${SESSION_FRONTEND_PORT:?missing frontend port on service ${SESSION_SERVICE}}"
+: "${CACHE_FLIGHT_PORT:?missing flight port on service ${CACHE_SERVICE}}"
 
 log "Running in-cluster console e2e pod"
 kubectl -n "$NAMESPACE" delete pod "$E2E_POD" --ignore-not-found=true >/dev/null
@@ -116,8 +122,8 @@ spec:
           source /usr/local/flame/sbin/flmenv.sh
           mkdir -p /root/.flame
           cp /etc/flame/flame.yaml /root/.flame/flame.yaml
-          export FLAME_ENDPOINT=http://${SESSION_SERVICE}:8080
-          export FLAME_CACHE_ENDPOINT=grpc://${CACHE_SERVICE}:9090
+          export FLAME_ENDPOINT=http://${SESSION_SERVICE}:${SESSION_FRONTEND_PORT}
+          export FLAME_CACHE_ENDPOINT=grpc://${CACHE_SERVICE}:${CACHE_FLIGHT_PORT}
           flmctl --config /root/.flame/flame.yaml list -a
           flmctl --config /root/.flame/flame.yaml list -n
           flmping -t ${FLMPING_TASKS}

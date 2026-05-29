@@ -64,6 +64,10 @@ spec:
             tcpSocket:
               port: frontend
             periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: frontend
+            periodSeconds: 10
           volumeMounts:
             - name: config
               mountPath: /usr/local/flame/conf/flame-cluster.yaml
@@ -71,8 +75,10 @@ spec:
               readOnly: true
             - name: session-data
               mountPath: /var/lib/flame/session
+              subPath: session
             - name: session-data
               mountPath: /usr/local/flame/events
+              subPath: events
             - name: logs
               mountPath: /usr/local/flame/logs
             {{- if .Values.tls.enabled }}
