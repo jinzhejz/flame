@@ -1,0 +1,19 @@
+{{- if .Values.objectCache.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flame.objectCache.name" . }}
+  labels:
+    {{- include "flame.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-cache
+spec:
+  type: {{ .Values.objectCache.service.type }}
+  ports:
+    - name: flight
+      port: {{ .Values.objectCache.service.port }}
+      targetPort: flight
+      protocol: TCP
+  selector:
+    {{- include "flame.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: object-cache
+{{- end }}

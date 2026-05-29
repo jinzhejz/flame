@@ -1,0 +1,42 @@
+{{- if and .Values.tests.enabled .Values.clientConfig.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "flame.fullname" . }}-test-connection
+  labels:
+    {{- include "flame.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- with .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: test
+      image: {{ include "flame.image" (dict "root" . "image" .Values.tests.image) | quote }}
+      imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+      command:
+        - /bin/bash
+        - -ec
+      args:
+        - |
+          source /usr/local/flame/sbin/flmenv.sh
+          flmctl --config /etc/flame/flame.yaml list -a
+      volumeMounts:
+        - name: client-config
+          mountPath: /etc/flame/flame.yaml
+          subPath: flame.yaml
+          readOnly: true
+      {{- with .Values.tests.resources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumes:
+    - name: client-config
+      configMap:
+        name: {{ include "flame.configMapName" . }}
+{{- end }}

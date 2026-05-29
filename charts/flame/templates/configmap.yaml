@@ -1,0 +1,74 @@
+{{- include "flame.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flame.configMapName" . }}
+  labels:
+    {{- include "flame.labels" . | nindent 4 }}
+data:
+  flame-cluster.yaml: |
+    ---
+    cluster:
+      name: {{ .Values.cluster.name | quote }}
+      endpoint: {{ include "flame.clusterEndpoint" . | quote }}
+      resreq: {{ .Values.cluster.resreq | quote }}
+      policies:
+        {{- range .Values.cluster.policies }}
+        - {{ . | quote }}
+        {{- end }}
+      storage: {{ .Values.cluster.storage | quote }}
+      schedule_interval: {{ .Values.cluster.scheduleInterval }}
+      executors:
+        shim: {{ .Values.cluster.executors.shim | quote }}
+      limits:
+        max_sessions: {{ .Values.cluster.limits.maxSessions }}
+        max_executors: {{ .Values.cluster.limits.maxExecutors }}
+      recovery:
+        session:
+          retry_limits: {{ .Values.cluster.recovery.session.retryLimits }}
+      {{- if .Values.tls.enabled }}
+      tls:
+        cert_file: {{ printf "%s/%s" (include "flame.tlsClusterPath" .) .Values.tls.cluster.certKey | quote }}
+        key_file: {{ printf "%s/%s" (include "flame.tlsClusterPath" .) .Values.tls.cluster.privateKeyKey | quote }}
+        ca_file: {{ printf "%s/%s" (include "flame.tlsClusterPath" .) .Values.tls.cluster.caKey | quote }}
+      {{- end }}
+    cache:
+      endpoint: {{ include "flame.cacheEndpoint" . | quote }}
+      network_interface: {{ .Values.objectCache.networkInterface | quote }}
+      storage: {{ .Values.objectCache.storage | quote }}
+      eviction:
+        policy: {{ .Values.objectCache.eviction.policy | quote }}
+        max_memory: {{ .Values.objectCache.eviction.maxMemory | quote }}
+        {{- if .Values.objectCache.eviction.maxObjects }}
+        max_objects: {{ .Values.objectCache.eviction.maxObjects }}
+        {{- end }}
+      {{- if .Values.tls.enabled }}
+      tls:
+        cert_file: {{ printf "%s/%s" (include "flame.tlsCachePath" .) .Values.tls.cache.certKey | quote }}
+        key_file: {{ printf "%s/%s" (include "flame.tlsCachePath" .) .Values.tls.cache.privateKeyKey | quote }}
+        ca_file: {{ printf "%s/%s" (include "flame.tlsCachePath" .) .Values.tls.cache.caKey | quote }}
+      {{- end }}
+  {{- if .Values.clientConfig.enabled }}
+  flame.yaml: |
+    ---
+    current-context: {{ .Values.cluster.name | quote }}
+    contexts:
+      - name: {{ .Values.cluster.name | quote }}
+        cluster:
+          endpoint: {{ include "flame.clusterEndpoint" . | quote }}
+          {{- if .Values.tls.enabled }}
+          tls:
+            ca_file: {{ printf "%s/%s" (include "flame.tlsClusterPath" .) .Values.tls.cluster.caKey | quote }}
+          {{- end }}
+        cache:
+          endpoint: {{ include "flame.cacheEndpoint" . | quote }}
+          {{- if .Values.tls.enabled }}
+          tls:
+            ca_file: {{ printf "%s/%s" (include "flame.tlsCachePath" .) .Values.tls.cache.caKey | quote }}
+          {{- end }}
+        package:
+          excludes:
+            {{- range .Values.clientConfig.package.excludes }}
+            - {{ . | quote }}
+            {{- end }}
+  {{- end }}

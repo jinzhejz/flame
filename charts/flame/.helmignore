@@ -1,0 +1,7 @@
+.git/
+.github/
+target/
+*.swp
+*.tmp
+*.bak
+.DS_Store

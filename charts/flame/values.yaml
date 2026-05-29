@@ -1,0 +1,132 @@
+global:
+  imageRegistry: xflops
+  imageTag: latest
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+cluster:
+  name: flame
+  resreq: "cpu=1,mem=2g"
+  policies:
+    - priority
+    - drf
+    - gang
+  scheduleInterval: 100
+  storage: "sqlite:///var/lib/flame/session/flame.db"
+  executors:
+    shim: host
+  limits:
+    maxSessions: 1000
+    maxExecutors: 128
+  recovery:
+    session:
+      retryLimits: 5
+
+sessionManager:
+  enabled: true
+  image:
+    repository: flame-session-manager
+    tag: ""
+  replicas: 1
+  service:
+    type: ClusterIP
+    frontendPort: 8080
+    backendPort: 8081
+  persistence:
+    enabled: true
+    storageClassName: ""
+    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+objectCache:
+  enabled: true
+  image:
+    repository: flame-object-cache
+    tag: ""
+  service:
+    type: ClusterIP
+    port: 9090
+  networkInterface: eth0
+  storage: "/var/lib/flame/cache"
+  persistence:
+    enabled: true
+    storageClassName: ""
+    size: 100Gi
+    accessModes:
+      - ReadWriteOnce
+  eviction:
+    policy: lru
+    maxMemory: 1G
+    maxObjects: null
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+executorManager:
+  enabled: true
+  image:
+    repository: flame-executor-manager
+    tag: ""
+  replicas: 3
+  runtimeStorage:
+    medium: ""
+    sizeLimit: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+tls:
+  enabled: false
+  mountPath: /etc/flame/certs
+  cluster:
+    secretName: ""
+    certKey: tls.crt
+    privateKeyKey: tls.key
+    caKey: ca.crt
+  cache:
+    secretName: ""
+    certKey: tls.crt
+    privateKeyKey: tls.key
+    caKey: ca.crt
+
+serviceAccount:
+  create: true
+  name: ""
+  automountToken: false
+
+podSecurityContext: {}
+securityContext: {}
+
+clientConfig:
+  enabled: true
+  package:
+    excludes:
+      - "*.log"
+      - "*.pkl"
+      - "*.tmp"
+
+tests:
+  enabled: true
+  image:
+    repository: flame-console
+    tag: ""
+  resources: {}
