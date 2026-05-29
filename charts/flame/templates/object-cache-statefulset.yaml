@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: object-cache
 spec:
   serviceName: {{ include "flame.objectCache.name" . }}
-  replicas: 1
+  replicas: {{ .Values.objectCache.replicas }}
   selector:
     matchLabels:
       {{- include "flame.selectorLabels" . | nindent 6 }}

@@ -109,6 +109,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if ne (int .Values.sessionManager.replicas) 1 -}}
 {{- fail "sessionManager.replicas must be 1 for the static chart" -}}
 {{- end -}}
+{{- if and .Values.objectCache.enabled (lt (int .Values.objectCache.replicas) 1) -}}
+{{- fail "objectCache.replicas must be at least 1 when objectCache.enabled=true" -}}
+{{- end -}}
 {{- $expectedBackendPort := add (int .Values.sessionManager.service.frontendPort) 1 -}}
 {{- if ne (int .Values.sessionManager.service.backendPort) (int $expectedBackendPort) -}}
 {{- fail (printf "sessionManager.service.backendPort must equal frontendPort + 1 (%d)" (int $expectedBackendPort)) -}}

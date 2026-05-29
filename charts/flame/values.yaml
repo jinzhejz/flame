@@ -54,6 +54,7 @@ objectCache:
   image:
     repository: flame-object-cache
     tag: ""
+  replicas: 1
   service:
     type: ClusterIP
     port: 9090

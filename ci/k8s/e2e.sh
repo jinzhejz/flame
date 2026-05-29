@@ -9,6 +9,7 @@ CHART_DIR="${CHART_DIR:-${ROOT_DIR}/charts/flame}"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-xflops}"
 IMAGE_TAG="${IMAGE_TAG:-ci}"
 IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-IfNotPresent}"
+OBJECT_CACHE_REPLICAS="${OBJECT_CACHE_REPLICAS:-2}"
 TIMEOUT="${TIMEOUT:-10m}"
 FLMPING_TASKS="${FLMPING_TASKS:-3}"
 E2E_POD="${E2E_POD:-${RELEASE}-console-e2e}"
@@ -57,6 +58,7 @@ helm template "$RELEASE" "$CHART_DIR" \
     --set "global.imagePullPolicy=${IMAGE_PULL_POLICY}" \
     --set sessionManager.persistence.enabled=false \
     --set objectCache.persistence.enabled=false \
+    --set "objectCache.replicas=${OBJECT_CACHE_REPLICAS}" \
     --set executorManager.replicas=1 \
     "$@" >/tmp/flame-k8s-e2e-rendered.yaml
 
@@ -71,6 +73,7 @@ helm upgrade --install "$RELEASE" "$CHART_DIR" \
     --set "global.imagePullPolicy=${IMAGE_PULL_POLICY}" \
     --set sessionManager.persistence.enabled=false \
     --set objectCache.persistence.enabled=false \
+    --set "objectCache.replicas=${OBJECT_CACHE_REPLICAS}" \
     --set executorManager.replicas=1 \
     "$@"
 

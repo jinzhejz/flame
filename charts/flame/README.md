@@ -3,12 +3,14 @@
 This chart installs a static Flame cluster on Kubernetes:
 
 - one `flame-session-manager`
-- one `flame-object-cache`
+- a configurable number of `flame-object-cache` replicas
 - a configurable number of `flame-executor-manager` replicas
 
 It does not implement the future Kubernetes provider or application pod
 autoscaling. Executor capacity is static and follows
-`executorManager.replicas`.
+`executorManager.replicas`. Object-cache capacity follows
+`objectCache.replicas`; each StatefulSet replica owns its own cache volume when
+persistence is enabled.
 
 ## Install
 
@@ -24,6 +26,15 @@ helm install flame ./charts/flame \
   --create-namespace \
   --set sessionManager.persistence.enabled=false \
   --set objectCache.persistence.enabled=false
+```
+
+To install multiple object-cache replicas:
+
+```bash
+helm install flame ./charts/flame \
+  --namespace flame \
+  --create-namespace \
+  --set objectCache.replicas=3
 ```
 
 ## Verify

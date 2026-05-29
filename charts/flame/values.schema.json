@@ -27,6 +27,7 @@
     "objectCache": {
       "type": "object",
       "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
         "service": {
           "type": "object",
           "properties": {

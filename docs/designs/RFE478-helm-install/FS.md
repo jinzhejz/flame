@@ -135,6 +135,7 @@ objectCache:
   image:
     repository: flame-object-cache
     tag: ""
+  replicas: 1
   service:
     type: ClusterIP
     port: 9090
@@ -270,15 +271,16 @@ The chart creates the following resources by default:
 | `flame-session-manager` | Deployment | Runs the Flame control plane. |
 | `flame-session-manager` | Service | Exposes frontend port `8080` and backend port `8081`. |
 | `flame-session-manager-data` | PVC | Stores SQLite database and event directory when persistence is enabled. |
-| `flame-object-cache` | StatefulSet | Runs the standalone object-cache server. |
+| `flame-object-cache` | StatefulSet | Runs one or more standalone object-cache servers. |
 | `flame-object-cache` | Service | Exposes Arrow Flight port `9090`. |
-| `flame-object-cache-data` | VolumeClaimTemplate/PVC | Stores object-cache data when persistence is enabled. |
+| `flame-object-cache-data` | VolumeClaimTemplate/PVC | Stores per-replica object-cache data when persistence is enabled. |
 | `flame-executor-manager` | Deployment | Runs static worker capacity. |
 | `flame` | ServiceAccount | Shared service account for pods. |
 
-The object cache is a `StatefulSet` because it owns persistent cache data. The
-session manager remains a single-replica `Deployment` for this RFE because Flame
-does not yet define active-active session-manager semantics.
+The object cache is a `StatefulSet` because each replica owns cache data and
+needs stable pod lifecycle semantics. The session manager remains a
+single-replica `Deployment` for this RFE because Flame does not yet define
+active-active session-manager semantics.
 
 The executor manager is a `Deployment` with configurable replicas. Each pod
 registers as a Flame node using the pod hostname detected by the runtime. This
@@ -407,7 +409,8 @@ contexts:
 **Limitations:**
 
 - Session manager is single-replica.
-- Object cache is single-replica and bound to one PVC.
+- Object-cache replicas are static and change only when `objectCache.replicas`
+  changes. With persistence enabled, each StatefulSet replica gets its own PVC.
 - Executor capacity is static and changes only when
   `executorManager.replicas` changes.
 - Executor-manager pods report runtime-detected CPU, memory, and GPU capacity.
@@ -523,7 +526,7 @@ contexts:
                 v
   +-----------------------------+       cache PVC
   | StatefulSet: flame-object-  |------ /var/lib/flame/cache
-  | cache replicas: 1           |
+  | cache replicas: M           |
   +-----------------------------+
 ```
 
@@ -547,7 +550,7 @@ contexts:
 
 - Validates common mistakes before install:
   - `sessionManager.replicas` must be `1`.
-  - `objectCache` must not set replicas above `1`.
+  - `objectCache.replicas` must be `>= 1`.
   - `executorManager.replicas` must be `>= 0`.
   - Service ports must be valid TCP ports.
   - TLS Secrets are required when `tls.enabled=true`.
@@ -644,6 +647,7 @@ values to Flame's existing config structure without requiring runtime changes:
 | `cluster.limits.maxSessions` | `cluster.limits.max_sessions` |
 | `cluster.limits.maxExecutors` | `cluster.limits.max_executors` |
 | `cluster.recovery.session.retryLimits` | `cluster.recovery.session.retry_limits` |
+| `objectCache.replicas` | StatefulSet `spec.replicas` |
 | `objectCache.networkInterface` | `cache.network_interface` |
 | `objectCache.storage` | `cache.storage` |
 | `objectCache.eviction.maxMemory` | `cache.eviction.max_memory` |
@@ -689,6 +693,15 @@ flame.image
 5. Removed pods stop heartbeating; existing recovery logic releases stale
    executors and retries tasks according to the configured recovery policy.
 
+**Static Object-Cache Scaling:**
+
+1. User changes `objectCache.replicas`.
+2. Kubernetes scales the object-cache StatefulSet.
+3. Each replica starts with the same rendered cache endpoint config and serves
+   through the object-cache Service.
+4. When persistence is enabled, each replica receives its own PVC from the
+   StatefulSet volume claim template.
+
 **Install Validation:**
 
 1. `values.schema.json` catches structural value errors.
@@ -713,7 +726,9 @@ flame.image
 
 - Executor capacity scales horizontally by changing
   `executorManager.replicas`.
-- Session-manager and object-cache scale-up are vertical only in this RFE.
+- Object-cache serving capacity scales horizontally by changing
+  `objectCache.replicas`; cache storage remains per replica by default.
+- Session-manager scale-up is vertical only in this RFE.
 - Future Kubernetes-provider work can add per-application pod scaling without
   changing this chart's core control-plane resources.
 
@@ -821,7 +836,7 @@ Chart unit checks:
 Kind smoke test:
 
 1. Create a Kind cluster with the existing `ci/kind.yaml`.
-2. Load or pull the three Flame component images.
+2. Load or pull the Flame component and console images.
 3. Install the chart with default values.
 4. Wait for session-manager, object-cache, and executor-manager pods.
 5. Run the Helm test pod to verify service reachability.
@@ -832,6 +847,8 @@ Manual verification:
 
 - Scale `executorManager.replicas` up and down and confirm Flame node count
   follows the static pod count.
+- Scale `objectCache.replicas` up and down and confirm the object-cache
+  StatefulSet reaches the requested ready replica count.
 - Restart the session-manager pod with persistence enabled and confirm
   applications and sessions recover according to existing recovery behavior.
 - Restart the object-cache pod with persistence enabled and confirm cached
