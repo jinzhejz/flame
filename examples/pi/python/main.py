@@ -6,9 +6,11 @@ randomly sampling points in a unit square and checking if they fall inside
 a quarter circle.
 """
 
-from flamepy.runner import Runner
-import numpy as np
 import math
+import os
+
+import numpy as np
+from flamepy.runner import Runner
 
 
 def estimate_batch(num_samples: int) -> int:
@@ -35,8 +37,12 @@ def main():
     print("=" * 60)
 
     # Configuration
-    num_batches = 10
-    samples_per_batch = 1_000_000
+    num_batches = int(os.getenv("PI_NUM_BATCHES", "10"))
+    samples_per_batch = int(os.getenv("PI_SAMPLES_PER_BATCH", "1000000"))
+    if num_batches <= 0:
+        raise ValueError("PI_NUM_BATCHES must be greater than 0")
+    if samples_per_batch <= 0:
+        raise ValueError("PI_SAMPLES_PER_BATCH must be greater than 0")
     total_samples = num_batches * samples_per_batch
 
     print(f"\nConfiguration:")

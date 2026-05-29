@@ -842,6 +842,8 @@ Kind smoke test:
 5. Run the Helm test pod to verify service reachability.
 6. Run `flmctl list -a` from an in-cluster client container using the rendered
    `flame.yaml`.
+7. Run `flmping` and the Python Pi Runner example from the in-cluster
+   `flame-console` image.
 
 Manual verification:
 

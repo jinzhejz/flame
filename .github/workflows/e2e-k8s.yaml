@@ -1,4 +1,4 @@
-name: Flame Kubernetes E2E
+name: Flame CI
 
 on: [push, pull_request, workflow_dispatch]
 
@@ -16,8 +16,8 @@ env:
   IMAGE_TAG: ci
 
 jobs:
-  k8s-e2e:
-    name: Helm chart on Kind
+  ci:
+    name: Kubernetes E2E Test
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

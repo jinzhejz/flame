@@ -12,6 +12,8 @@ IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-IfNotPresent}"
 OBJECT_CACHE_REPLICAS="${OBJECT_CACHE_REPLICAS:-2}"
 TIMEOUT="${TIMEOUT:-10m}"
 FLMPING_TASKS="${FLMPING_TASKS:-3}"
+PI_NUM_BATCHES="${PI_NUM_BATCHES:-2}"
+PI_SAMPLES_PER_BATCH="${PI_SAMPLES_PER_BATCH:-1000}"
 E2E_POD="${E2E_POD:-${RELEASE}-console-e2e}"
 
 log() {
@@ -130,6 +132,10 @@ spec:
           flmctl --config /root/.flame/flame.yaml list -a
           flmctl --config /root/.flame/flame.yaml list -n
           flmping -t ${FLMPING_TASKS}
+          cd /usr/local/flame/examples/pi/python
+          export PI_NUM_BATCHES=${PI_NUM_BATCHES}
+          export PI_SAMPLES_PER_BATCH=${PI_SAMPLES_PER_BATCH}
+          uv run main.py
       volumeMounts:
         - name: client-config
           mountPath: /etc/flame/flame.yaml
