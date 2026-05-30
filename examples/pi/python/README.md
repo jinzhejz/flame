@@ -31,7 +31,8 @@ The Pi example demonstrates how to use the `flamepy.Runner` API to perform a dis
 ### Files
 
 - **`main.py`**: Contains the batch estimator and distributed orchestration. It submits batches to the Flame cluster, collects results, and prints the final estimate.
-- **`pyproject.toml`**: Defines the package and dependencies, including `flamepy`.
+- **`pyproject.toml`**: Defines the package and third-party dependencies. The
+  Flame environment provides `flamepy`.
 - **`README.md`**: This file; explains the motivation, approach, usage, and output of the example.
 
 ### Key Benefits

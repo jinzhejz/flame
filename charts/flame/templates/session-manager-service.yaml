@@ -1,0 +1,23 @@
+{{- if .Values.sessionManager.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flame.sessionManager.name" . }}
+  labels:
+    {{- include "flame.labels" . | nindent 4 }}
+    app.kubernetes.io/component: session-manager
+spec:
+  type: {{ .Values.sessionManager.service.type }}
+  ports:
+    - name: frontend
+      port: {{ .Values.sessionManager.service.frontendPort }}
+      targetPort: frontend
+      protocol: TCP
+    - name: backend
+      port: {{ .Values.sessionManager.service.backendPort }}
+      targetPort: backend
+      protocol: TCP
+  selector:
+    {{- include "flame.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: session-manager
+{{- end }}

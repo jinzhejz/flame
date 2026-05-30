@@ -1,0 +1,18 @@
+{{- if and .Values.sessionManager.enabled .Values.sessionManager.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "flame.sessionManager.name" . }}-data
+  labels:
+    {{- include "flame.labels" . | nindent 4 }}
+    app.kubernetes.io/component: session-manager
+spec:
+  accessModes:
+    {{- toYaml .Values.sessionManager.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.sessionManager.persistence.size }}
+  {{- if .Values.sessionManager.persistence.storageClassName }}
+  storageClassName: {{ .Values.sessionManager.persistence.storageClassName | quote }}
+  {{- end }}
+{{- end }}

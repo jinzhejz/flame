@@ -1,0 +1,17 @@
+apiVersion: v2
+name: flame
+description: Static Kubernetes deployment for Flame
+type: application
+version: 0.1.0
+appVersion: "0.6.0"
+home: https://github.com/xflops/flame
+sources:
+  - https://github.com/xflops/flame
+keywords:
+  - flame
+  - distributed
+  - ai
+  - scheduler
+maintainers:
+  - name: Flame Authors
+    email: support@xflops.io

@@ -94,6 +94,13 @@ const EXAMPLES: &[ExampleSpec] = &[
         assets: &["README.md"],
     },
     ExampleSpec {
+        name: "pi/python",
+        package: "pi-python",
+        relative_dir: "pi/python",
+        binaries: &[],
+        assets: &[".python-version", "README.md", "main.py", "pyproject.toml"],
+    },
+    ExampleSpec {
         name: "candle/based",
         package: "candle-based-example",
         relative_dir: "candle/based",

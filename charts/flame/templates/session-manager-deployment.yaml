@@ -1,0 +1,133 @@
+{{- if .Values.sessionManager.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flame.sessionManager.name" . }}
+  labels:
+    {{- include "flame.labels" . | nindent 4 }}
+    app.kubernetes.io/component: session-manager
+spec:
+  replicas: {{ .Values.sessionManager.replicas }}
+  selector:
+    matchLabels:
+      {{- include "flame.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: session-manager
+  template:
+    metadata:
+      labels:
+        {{- include "flame.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: session-manager
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "flame.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: session-manager
+          image: {{ include "flame.image" (dict "root" . "image" .Values.sessionManager.image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          workingDir: /usr/local/flame
+          command:
+            - /usr/local/flame/bin/flame-session-manager
+          args:
+            - --config
+            - /usr/local/flame/conf/flame-cluster.yaml
+          env:
+            - name: RUST_LOG
+              value: info
+            - name: FLAME_HOME
+              value: /usr/local/flame
+            {{- with .Values.sessionManager.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: frontend
+              containerPort: {{ .Values.sessionManager.service.frontendPort }}
+              protocol: TCP
+            - name: backend
+              containerPort: {{ .Values.sessionManager.service.backendPort }}
+              protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: frontend
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            tcpSocket:
+              port: frontend
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: frontend
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/flame/conf/flame-cluster.yaml
+              subPath: flame-cluster.yaml
+              readOnly: true
+            - name: session-data
+              mountPath: /var/lib/flame/session
+              subPath: session
+            - name: session-data
+              mountPath: /usr/local/flame/events
+              subPath: events
+            - name: logs
+              mountPath: /usr/local/flame/logs
+            {{- if .Values.tls.enabled }}
+            - name: cluster-tls
+              mountPath: {{ include "flame.tlsClusterPath" . }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.sessionManager.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.sessionManager.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "flame.configMapName" . }}
+        - name: session-data
+          {{- if .Values.sessionManager.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "flame.sessionManager.name" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          emptyDir: {}
+        {{- if .Values.tls.enabled }}
+        - name: cluster-tls
+          secret:
+            secretName: {{ .Values.tls.cluster.secretName }}
+        {{- end }}
+        {{- with .Values.sessionManager.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.sessionManager.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sessionManager.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sessionManager.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

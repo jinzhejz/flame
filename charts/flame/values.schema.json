@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "global": {
+      "type": "object",
+      "properties": {
+        "imageRegistry": { "type": "string" },
+        "imageTag": { "type": "string" },
+        "imagePullPolicy": { "type": "string" },
+        "imagePullSecrets": { "type": "array" }
+      }
+    },
+    "sessionManager": {
+      "type": "object",
+      "properties": {
+        "replicas": { "type": "integer", "enum": [1] },
+        "service": {
+          "type": "object",
+          "properties": {
+            "frontendPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "backendPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        }
+      }
+    },
+    "objectCache": {
+      "type": "object",
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "service": {
+          "type": "object",
+          "properties": {
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        }
+      }
+    },
+    "executorManager": {
+      "type": "object",
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "mountPath": { "type": "string", "minLength": 1 },
+        "cluster": {
+          "type": "object",
+          "properties": {
+            "secretName": { "type": "string" },
+            "certKey": { "type": "string", "minLength": 1 },
+            "privateKeyKey": { "type": "string", "minLength": 1 },
+            "caKey": { "type": "string", "minLength": 1 }
+          }
+        },
+        "cache": {
+          "type": "object",
+          "properties": {
+            "secretName": { "type": "string" },
+            "certKey": { "type": "string", "minLength": 1 },
+            "privateKeyKey": { "type": "string", "minLength": 1 },
+            "caKey": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "tls": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tls": {
+            "properties": {
+              "cluster": {
+                "properties": {
+                  "secretName": { "type": "string", "minLength": 1 }
+                },
+                "required": ["secretName"]
+              },
+              "cache": {
+                "properties": {
+                  "secretName": { "type": "string", "minLength": 1 }
+                },
+                "required": ["secretName"]
+              }
+            },
+            "required": ["cluster", "cache"]
+          }
+        }
+      }
+    }
+  ]
+}

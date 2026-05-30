@@ -1,0 +1,141 @@
+{{- if .Values.objectCache.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "flame.objectCache.name" . }}
+  labels:
+    {{- include "flame.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-cache
+spec:
+  serviceName: {{ include "flame.objectCache.name" . }}
+  replicas: {{ .Values.objectCache.replicas }}
+  selector:
+    matchLabels:
+      {{- include "flame.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: object-cache
+  template:
+    metadata:
+      labels:
+        {{- include "flame.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: object-cache
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "flame.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: object-cache
+          image: {{ include "flame.image" (dict "root" . "image" .Values.objectCache.image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          workingDir: /usr/local/flame
+          command:
+            - /usr/local/flame/bin/flame-object-cache
+          args:
+            - --config
+            - /usr/local/flame/conf/flame-cluster.yaml
+          env:
+            - name: RUST_LOG
+              value: info
+            - name: FLAME_HOME
+              value: /usr/local/flame
+            {{- with .Values.objectCache.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: flight
+              containerPort: {{ .Values.objectCache.service.port }}
+              protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: flight
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            tcpSocket:
+              port: flight
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: flight
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/flame/conf/flame-cluster.yaml
+              subPath: flame-cluster.yaml
+              readOnly: true
+            - name: cache-data
+              mountPath: /var/lib/flame/cache
+            - name: logs
+              mountPath: /usr/local/flame/logs
+            {{- if .Values.tls.enabled }}
+            - name: cache-tls
+              mountPath: {{ include "flame.tlsCachePath" . }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.objectCache.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.objectCache.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "flame.configMapName" . }}
+        - name: logs
+          emptyDir: {}
+        {{- if not .Values.objectCache.persistence.enabled }}
+        - name: cache-data
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: cache-tls
+          secret:
+            secretName: {{ .Values.tls.cache.secretName }}
+        {{- end }}
+        {{- with .Values.objectCache.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.objectCache.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.objectCache.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.objectCache.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.objectCache.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: cache-data
+        labels:
+          {{- include "flame.labels" . | nindent 10 }}
+          app.kubernetes.io/component: object-cache
+      spec:
+        accessModes:
+          {{- toYaml .Values.objectCache.persistence.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.objectCache.persistence.size }}
+        {{- if .Values.objectCache.persistence.storageClassName }}
+        storageClassName: {{ .Values.objectCache.persistence.storageClassName | quote }}
+        {{- end }}
+  {{- end }}
+{{- end }}

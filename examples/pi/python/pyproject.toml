@@ -5,11 +5,5 @@ description = "Monte Carlo Estimation of π by flamepy.Runner"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "flamepy",
     "numpy"
 ]
-
-
-
-[tool.uv.sources]
-flamepy = { path = "/usr/local/flame/sdk/python" }

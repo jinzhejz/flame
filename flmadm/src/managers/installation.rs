@@ -843,6 +843,17 @@ mod tests {
             fs::create_dir_all(&pi_dir).unwrap();
             fs::write(pi_dir.join("README.md"), "readme").unwrap();
 
+            let python_pi_dir = src_dir.join("examples/pi/python");
+            fs::create_dir_all(&python_pi_dir).unwrap();
+            fs::write(python_pi_dir.join(".python-version"), "3.12").unwrap();
+            fs::write(python_pi_dir.join("README.md"), "readme").unwrap();
+            fs::write(python_pi_dir.join("main.py"), "print('pi')").unwrap();
+            fs::write(
+                python_pi_dir.join("pyproject.toml"),
+                "[project]\nname = \"pi\"\n",
+            )
+            .unwrap();
+
             let example_dir = src_dir.join("examples/candle/based");
             fs::create_dir_all(&example_dir).unwrap();
             fs::write(
@@ -870,6 +881,11 @@ mod tests {
             assert!(paths.examples.join("pi/rust/pi-service").exists());
             assert!(paths.examples.join("pi/rust/README.md").exists());
             assert!(!paths.examples.join("pi/rust/deploy.sh").exists());
+            assert!(paths.examples.join("pi/python/.python-version").exists());
+            assert!(paths.examples.join("pi/python/README.md").exists());
+            assert!(paths.examples.join("pi/python/main.py").exists());
+            assert!(paths.examples.join("pi/python/pyproject.toml").exists());
+            assert!(!paths.examples.join("pi/python/pi").exists());
 
             assert!(paths
                 .examples
