@@ -200,6 +200,14 @@ with Runner("square-app") as runner:
 
 Runner returns `ObjectFuture` values. Use `future.get()` to fetch a concrete result, `future.ref()` to get the `ObjectRef`, `runner.wait()` to wait for a batch, and `runner.select()` to iterate as results complete.
 
+To verify a configured cluster end to end with Runner, run:
+
+```bash
+python -m flamepy.runner.e2e
+```
+
+Installed wheels also provide the `flamepy-runner-e2e` command. The check validates the `flmrun` template, Runner package upload/install, function execution, `ObjectFuture` chaining, and a stateful instance service.
+
 ## API Map
 
 | Area | Python API |

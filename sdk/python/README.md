@@ -32,6 +32,22 @@ if __name__ == "__main__":
     main()
 ```
 
+## Verify A Runner Cluster
+
+After configuring `~/.flame/flame.yaml` for a running cluster with session manager, object cache, executor manager, and the `flmrun` template application, run:
+
+```bash
+python -m flamepy.runner.e2e
+```
+
+Installed wheels also provide:
+
+```bash
+flamepy-runner-e2e
+```
+
+The check packages a tiny temporary project and verifies Runner function calls, `ObjectFuture` chaining, and a stateful instance service. Use `--json` for machine-readable output and `--python-version 3.12` to verify a specific executor Python runtime.
+
 ## API Reference
 
 ### Session

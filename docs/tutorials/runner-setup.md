@@ -66,6 +66,22 @@ runner:
 
 ## Basic Usage
 
+### Verify A Cluster
+
+The Python SDK includes a small Runner E2E command for checking that a configured cluster can run Runner workloads:
+
+```bash
+python -m flamepy.runner.e2e
+```
+
+Installed wheels also expose the same check as:
+
+```bash
+flamepy-runner-e2e
+```
+
+The check packages a temporary project, verifies the configured `flmrun` template, runs a function service, passes `ObjectFuture` values between services, and runs a stateful instance service. Use `--json` for machine-readable output, `--tasks N` to change the function-task count, and `--python-version 3.12` to verify a specific executor Python runtime.
+
 ### Function Service
 
 ```python
