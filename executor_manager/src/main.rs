@@ -27,7 +27,7 @@ mod stream_handler;
 #[derive(Parser)]
 #[command(name = "flame-executor-manager")]
 #[command(author = "XFLOPS <support@xflops.io>")]
-#[command(version = "0.5.0")]
+#[command(version)]
 #[command(about = "Flame Executor Manager", long_about = None)]
 struct Cli {
     #[arg(long)]
