@@ -165,6 +165,7 @@ For more details, see the [flmadm README](flmadm/README.md).
 * [Rust API Tutorial](docs/tutorials/rust-api.md)
 * [Local Development](docs/tutorials/local-development.md)
 * [Runner Setup Guide](docs/tutorials/runner-setup.md)
+* [Release Process](docs/release-process.md)
 * [Design Documents](docs/designs/)
 
 ## API Reference
