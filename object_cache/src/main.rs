@@ -23,6 +23,8 @@ mod storage;
 
 #[derive(Parser)]
 #[command(name = "flame-object-cache")]
+#[command(author = "XFLOPS <support@xflops.io>")]
+#[command(version)]
 #[command(about = "Standalone object cache server for Flame")]
 struct Args {
     #[arg(short, long)]

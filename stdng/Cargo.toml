@@ -1,7 +1,10 @@
 [package]
 name = "stdng"
-version = "0.1.0"
+version = "0.1.8"
 edition = "2024"
+description = "An enhancement for Rust standard library"
+repository = "https://github.com/xflops/flame"
+license = "Apache-2.0"
 
 [dependencies]
 thiserror = { workspace = true }

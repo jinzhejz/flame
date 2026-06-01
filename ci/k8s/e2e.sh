@@ -10,12 +10,26 @@ IMAGE_REGISTRY="${IMAGE_REGISTRY:-xflops}"
 IMAGE_TAG="${IMAGE_TAG:-ci}"
 IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-IfNotPresent}"
 OBJECT_CACHE_REPLICAS="${OBJECT_CACHE_REPLICAS:-2}"
+SESSION_MANAGER_STORAGE="${SESSION_MANAGER_STORAGE:-fs:///var/lib/flame/session}"
 TIMEOUT="${TIMEOUT:-10m}"
 FLMPING_TASKS="${FLMPING_TASKS:-3}"
 RUNNER_E2E_TASKS="${RUNNER_E2E_TASKS:-3}"
 PI_NUM_BATCHES="${PI_NUM_BATCHES:-2}"
 PI_SAMPLES_PER_BATCH="${PI_SAMPLES_PER_BATCH:-1000}"
 E2E_POD="${E2E_POD:-${RELEASE}-console-e2e}"
+
+HELM_E2E_ARGS=(
+    --set "global.imageRegistry=${IMAGE_REGISTRY}"
+    --set "global.imageTag=${IMAGE_TAG}"
+    --set "global.imagePullPolicy=${IMAGE_PULL_POLICY}"
+    --set "cluster.storage=${SESSION_MANAGER_STORAGE}"
+    --set "cluster.policies[0]=drf"
+    --set "cluster.policies[1]=gang"
+    --set sessionManager.persistence.enabled=false
+    --set objectCache.persistence.enabled=false
+    --set "objectCache.replicas=${OBJECT_CACHE_REPLICAS}"
+    --set executorManager.replicas=1
+)
 
 log() {
     printf '[k8s-e2e] %s\n' "$*"
@@ -51,18 +65,12 @@ wait_rollout() {
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then dump_debug; fi' EXIT
 
 log "Linting chart"
-helm lint "$CHART_DIR"
+helm lint "$CHART_DIR" "${HELM_E2E_ARGS[@]}" "$@"
 
 log "Rendering chart"
 helm template "$RELEASE" "$CHART_DIR" \
     --namespace "$NAMESPACE" \
-    --set "global.imageRegistry=${IMAGE_REGISTRY}" \
-    --set "global.imageTag=${IMAGE_TAG}" \
-    --set "global.imagePullPolicy=${IMAGE_PULL_POLICY}" \
-    --set sessionManager.persistence.enabled=false \
-    --set objectCache.persistence.enabled=false \
-    --set "objectCache.replicas=${OBJECT_CACHE_REPLICAS}" \
-    --set executorManager.replicas=1 \
+    "${HELM_E2E_ARGS[@]}" \
     "$@" >/tmp/flame-k8s-e2e-rendered.yaml
 
 log "Installing chart into namespace ${NAMESPACE}"
@@ -71,13 +79,7 @@ helm upgrade --install "$RELEASE" "$CHART_DIR" \
     --create-namespace \
     --wait \
     --timeout "$TIMEOUT" \
-    --set "global.imageRegistry=${IMAGE_REGISTRY}" \
-    --set "global.imageTag=${IMAGE_TAG}" \
-    --set "global.imagePullPolicy=${IMAGE_PULL_POLICY}" \
-    --set sessionManager.persistence.enabled=false \
-    --set objectCache.persistence.enabled=false \
-    --set "objectCache.replicas=${OBJECT_CACHE_REPLICAS}" \
-    --set executorManager.replicas=1 \
+    "${HELM_E2E_ARGS[@]}" \
     "$@"
 
 wait_rollout deployment session-manager

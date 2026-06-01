@@ -31,8 +31,8 @@ use flame_rs::{self as flame};
 
 #[derive(Parser)]
 #[command(name = "flmping")]
-#[command(author = "Xflops <support@xflops.io>")]
-#[command(version = "0.5.0")]
+#[command(author = "XFLOPS <support@xflops.io>")]
+#[command(version)]
 #[command(about = "Flame Ping", long_about = None)]
 struct Cli {
     /// The number of tasks to run

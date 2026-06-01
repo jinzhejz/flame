@@ -11,11 +11,10 @@ cluster:
   name: flame
   resreq: "cpu=1,mem=2g"
   policies:
-    - priority
     - drf
     - gang
   scheduleInterval: 100
-  storage: "sqlite:///var/lib/flame/session/flame.db"
+  storage: "fs:///var/lib/flame/session"
   executors:
     shim: host
   limits:
