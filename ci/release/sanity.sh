@@ -11,7 +11,7 @@ COMPOSE_E2E="${RELEASE_SANITY_COMPOSE_E2E:-0}"
 METADATA_CHECKS="${RELEASE_SANITY_METADATA_CHECKS:-1}"
 EXPECTED_PLATFORMS="${RELEASE_SANITY_EXPECTED_PLATFORMS:-linux/amd64 linux/arm64}"
 IMAGE_REPOSITORIES="${RELEASE_SANITY_IMAGE_REPOSITORIES:-flame-session-manager flame-object-cache flame-executor-manager flame-console}"
-CONTAINER_RUNTIME="${RELEASE_SANITY_CONTAINER_RUNTIME:-${CONTAINER_RUNTIME:-}}"
+CONTAINER_CLI="${RELEASE_SANITY_CONTAINER_CLI:-${RELEASE_SANITY_CONTAINER_RUNTIME:-${CONTAINER_RUNTIME:-}}}"
 COMPOSE_PROJECT_NAME="${RELEASE_SANITY_COMPOSE_PROJECT_NAME:-flame-release-sanity}"
 COMPOSE_NETWORK_NAME="${RELEASE_SANITY_COMPOSE_NETWORK_NAME:-flame-release-sanity-flame-net}"
 COMPOSE_PULL="${RELEASE_SANITY_COMPOSE_PULL:-1}"
@@ -22,8 +22,8 @@ PYPI_INDEX_URL="${RELEASE_SANITY_PYPI_INDEX_URL:-https://pypi.org/simple}"
 PYPI_CHECK_IMAGE="${RELEASE_SANITY_PYPI_CHECK_IMAGE:-python:3.12-slim}"
 COMPOSE_OVERRIDE_FILE=""
 PYPI_CHECK_SCRIPT=""
+MANIFEST_FILE=""
 COMPOSE_STARTED=0
-COMPOSE_BIN=""
 
 log() {
     printf '[release-sanity] %s\n' "$*"
@@ -70,6 +70,10 @@ cleanup() {
     if [ -n "$PYPI_CHECK_SCRIPT" ]; then
         rm -f "$PYPI_CHECK_SCRIPT"
     fi
+
+    if [ -n "${MANIFEST_FILE:-}" ]; then
+        rm -f "$MANIFEST_FILE"
+    fi
 }
 
 assert_eq() {
@@ -85,10 +89,9 @@ assert_eq() {
 load_detected_versions() {
     need python3
 
-    local versions_file
-    versions_file="${TMPDIR:-/tmp}/flame-release-sanity-versions.$$"
+    local detected_versions
 
-    python3 - "$ROOT_DIR" >"$versions_file" <<'PY'
+    detected_versions="$(python3 - "$ROOT_DIR" <<'PY'
 import ast
 import pathlib
 import shlex
@@ -159,10 +162,9 @@ shell_var("DETECTED_CHART_APP_VERSION", chart_top_level(root / "charts/flame/Cha
 shell_var("DETECTED_FLAME_RS_STDNG_DEP_VERSION", stdng_dep.get("version"))
 shell_var("DETECTED_FLAME_RS_MACROS_DEP_VERSION", macros_dep.get("version"))
 PY
+)"
 
-    # shellcheck disable=SC1090
-    . "$versions_file"
-    rm -f "$versions_file"
+    eval "$detected_versions"
 }
 
 configure_inputs() {
@@ -203,6 +205,7 @@ check_metadata() {
     log "  CHART_APP_VERSION=${CHART_APP_VERSION}"
     log "  DOCKER_TAG=${DOCKER_TAG}"
     log "  IMAGE_REGISTRY=${IMAGE_REGISTRY}"
+    log "  CONTAINER_CLI=${CONTAINER_CLI:-auto}"
     log "  RELEASE_SANITY_METADATA_CHECKS=${METADATA_CHECKS}"
     log "  RELEASE_SANITY_COMPOSE_E2E=${COMPOSE_E2E}"
 
@@ -240,7 +243,7 @@ run_local_checks() {
         log "helm template flame charts/flame"
         helm template flame "$ROOT_DIR/charts/flame" \
             --set "global.imageRegistry=${IMAGE_REGISTRY}" \
-            --set "global.imageTag=${DOCKER_TAG}" >/tmp/flame-release-sanity-rendered.yaml
+            --set "global.imageTag=${DOCKER_TAG}" >/dev/null
     else
         log "Skipping Helm lint/template because helm is not installed"
     fi
@@ -335,41 +338,25 @@ PY
 
 inspect_image_manifest() {
     local image="$1"
-    local manifest_file
 
-    manifest_file="${TMPDIR:-/tmp}/flame-release-sanity-manifest.$$.$(basename "$image").json"
+    MANIFEST_FILE="$(mktemp "${TMPDIR:-/tmp}/flame-release-sanity-manifest.XXXXXX")"
 
-    if command -v docker >/dev/null 2>&1; then
-        log "docker buildx imagetools inspect --raw ${image}"
-        if docker buildx imagetools inspect --raw "$image" >"$manifest_file" 2>/dev/null && check_manifest_platforms "$image" "$manifest_file"; then
-            rm -f "$manifest_file"
-            return
-        fi
+    log "${CONTAINER_CLI} manifest inspect ${image}"
+    if "$CONTAINER_CLI" manifest inspect "$image" >"$MANIFEST_FILE" 2>/dev/null; then
+        check_manifest_platforms "$image" "$MANIFEST_FILE"
+        rm -f "$MANIFEST_FILE"
+        MANIFEST_FILE=""
+        return
     fi
 
-    if command -v podman >/dev/null 2>&1; then
-        log "podman manifest inspect ${image}"
-        if podman manifest inspect "$image" >"$manifest_file" 2>/dev/null && check_manifest_platforms "$image" "$manifest_file"; then
-            rm -f "$manifest_file"
-            return
-        fi
+    log "${CONTAINER_CLI} pull ${image}"
+    "$CONTAINER_CLI" pull "$image" >/dev/null
+    log "${CONTAINER_CLI} image inspect ${image}"
+    "$CONTAINER_CLI" image inspect "$image" >"$MANIFEST_FILE"
+    check_manifest_platforms "$image" "$MANIFEST_FILE"
 
-        log "podman pull ${image}"
-        podman pull "$image" >/dev/null
-        log "podman image inspect ${image}"
-        podman image inspect "$image" >"$manifest_file"
-        check_manifest_platforms "$image" "$manifest_file"
-    elif command -v docker >/dev/null 2>&1; then
-        log "docker pull ${image}"
-        docker pull "$image" >/dev/null
-        log "docker image inspect ${image}"
-        docker image inspect "$image" >"$manifest_file"
-        check_manifest_platforms "$image" "$manifest_file"
-    else
-        fail "podman or docker is required for image manifest checks"
-    fi
-
-    rm -f "$manifest_file"
+    rm -f "$MANIFEST_FILE"
+    MANIFEST_FILE=""
 }
 
 run_remote_checks() {
@@ -378,6 +365,7 @@ run_remote_checks() {
     check_url "crates.io flame-rs-macros ${CARGO_VERSION}" "https://crates.io/api/v1/crates/flame-rs-macros/${CARGO_VERSION}"
     check_url "crates.io flame-rs ${CARGO_VERSION}" "https://crates.io/api/v1/crates/flame-rs/${CARGO_VERSION}"
 
+    select_container_cli
     for repo in $IMAGE_REPOSITORIES; do
         inspect_image_manifest "${IMAGE_REGISTRY}/${repo}:${DOCKER_TAG}"
     done
@@ -387,71 +375,34 @@ run_k8s_e2e() {
     IMAGE_REGISTRY="$IMAGE_REGISTRY" IMAGE_TAG="$DOCKER_TAG" "$ROOT_DIR/ci/k8s/e2e.sh"
 }
 
-select_container_runtime() {
-    if [ -n "$CONTAINER_RUNTIME" ]; then
-        need "$CONTAINER_RUNTIME"
-        if "$CONTAINER_RUNTIME" compose version >/dev/null 2>&1; then
-            COMPOSE_BIN="$CONTAINER_RUNTIME compose"
-        elif [ "$CONTAINER_RUNTIME" = "podman" ] && command -v podman-compose >/dev/null 2>&1; then
-            COMPOSE_BIN="podman-compose"
-        else
-            fail "${CONTAINER_RUNTIME} compose is not available"
+select_container_cli() {
+    if [ -n "$CONTAINER_CLI" ]; then
+        need "$CONTAINER_CLI"
+        "$CONTAINER_CLI" compose version >/dev/null 2>&1 || fail "${CONTAINER_CLI} compose is not available"
+        return
+    fi
+
+    local candidate
+    for candidate in docker podman; do
+        if command -v "$candidate" >/dev/null 2>&1 && "$candidate" compose version >/dev/null 2>&1; then
+            CONTAINER_CLI="$candidate"
+            return
         fi
-        return
-    fi
+    done
 
-    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-        CONTAINER_RUNTIME=docker
-        COMPOSE_BIN="docker compose"
-        return
-    fi
-
-    if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
-        CONTAINER_RUNTIME=podman
-        COMPOSE_BIN="podman compose"
-        return
-    fi
-
-    if command -v podman >/dev/null 2>&1 && command -v podman-compose >/dev/null 2>&1; then
-        CONTAINER_RUNTIME=podman
-        COMPOSE_BIN="podman-compose"
-        return
-    fi
-
-    fail "docker compose or podman compose is required for Docker Compose sanity checks"
+    fail "docker or podman with compose support is required for container sanity checks"
 }
 
 compose_command() {
-    case "$COMPOSE_BIN" in
-        "docker compose")
-            docker compose \
-                -p "$COMPOSE_PROJECT_NAME" \
-                -f "$ROOT_DIR/compose.yaml" \
-                -f "$COMPOSE_OVERRIDE_FILE" \
-                "$@"
-            ;;
-        "podman compose")
-            podman compose \
-                -p "$COMPOSE_PROJECT_NAME" \
-                -f "$ROOT_DIR/compose.yaml" \
-                -f "$COMPOSE_OVERRIDE_FILE" \
-                "$@"
-            ;;
-        "podman-compose")
-            podman-compose \
-                -p "$COMPOSE_PROJECT_NAME" \
-                -f "$ROOT_DIR/compose.yaml" \
-                -f "$COMPOSE_OVERRIDE_FILE" \
-                "$@"
-            ;;
-        *)
-            fail "compose command is not configured"
-            ;;
-    esac
+    "$CONTAINER_CLI" compose \
+        -p "$COMPOSE_PROJECT_NAME" \
+        -f "$ROOT_DIR/compose.yaml" \
+        -f "$COMPOSE_OVERRIDE_FILE" \
+        "$@"
 }
 
 write_compose_override() {
-    COMPOSE_OVERRIDE_FILE="${TMPDIR:-/tmp}/flame-release-sanity-compose.$$.yaml"
+    COMPOSE_OVERRIDE_FILE="$(mktemp "${TMPDIR:-/tmp}/flame-release-sanity-compose.XXXXXX")"
     cat >"$COMPOSE_OVERRIDE_FILE" <<EOF
 services:
   flame-session-manager:
@@ -469,7 +420,7 @@ EOF
 }
 
 write_pypi_check_script() {
-    PYPI_CHECK_SCRIPT="${TMPDIR:-/tmp}/flame-release-sanity-pypi-check.$$.sh"
+    PYPI_CHECK_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/flame-release-sanity-pypi-check.XXXXXX")"
     cat >"$PYPI_CHECK_SCRIPT" <<'EOF'
 #!/bin/sh
 set -eu
@@ -533,7 +484,7 @@ wait_for_compose_cluster() {
 
 run_pypi_compose_e2e() {
     log "Running PyPI flamepy ${PYTHON_VERSION} Runner check in ${PYPI_CHECK_IMAGE}"
-    run "$CONTAINER_RUNTIME" run --rm \
+    run "$CONTAINER_CLI" run --rm \
         --network "$COMPOSE_NETWORK_NAME" \
         -v "$ROOT_DIR/ci/certs:/etc/flame/certs:ro" \
         -v "$PYPI_CHECK_SCRIPT:/tmp/flame-release-sanity-pypi-check.sh:ro" \
@@ -548,7 +499,7 @@ run_pypi_compose_e2e() {
 }
 
 run_compose_e2e() {
-    select_container_runtime
+    select_container_cli
     write_compose_override
     write_pypi_check_script
 
