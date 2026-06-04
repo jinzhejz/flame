@@ -16,6 +16,11 @@ export STDNG_VERSION=0.1.8
 export DOCKER_TAG="${RELEASE_TAG}"
 export RELEASE_BRANCH=release-0.6
 export IMAGE_REGISTRY=docker.io/xflops
+export RELEASE_IMAGE_PLATFORMS=linux/amd64,linux/arm64
+export RUST_BUILDER_IMAGE=docker.io/library/rust:1.95
+export UBUNTU_BASE_IMAGE=docker.io/library/ubuntu:24.04
+# Optional override; Makefile auto-detects usable podman first, then docker.
+# export CONTAINER_CLI=podman
 export RELEASE_NOTES_FILE=/tmp/flame-${RELEASE_TAG}-notes.md
 ```
 
@@ -45,10 +50,7 @@ Confirm container image credentials with the tool selected for the image publish
 step:
 
 ```shell
-# Podman path:
-podman login --get-login docker.io || podman login docker.io
-# Docker path:
-docker login docker.io
+make release-images-login
 ```
 
 Required permissions:
@@ -144,11 +146,17 @@ cargo package --manifest-path sdk/rust/macros/Cargo.toml --allow-dirty
 cargo package --manifest-path sdk/rust/Cargo.toml --allow-dirty --features macros
 ```
 
+If `flame-rs` depends on a `flame-rs-macros` version that has not been
+published yet, the final `flame-rs` package verification will fail while
+resolving registry dependencies. In that case, publish and verify
+`flame-rs-macros` first, then rerun the full `flame-rs` package command before
+publishing `flame-rs`.
+
 Python package verification:
 
 ```shell
 cd sdk/python
-uv run -n pytest tests/test_runner_e2e.py tests/test_runner.py -q
+uv run -n --extra dev pytest tests/test_runner_e2e.py tests/test_runner.py -q
 uv run -n python -c 'import flamepy; print(flamepy.__version__)'
 uv build --out-dir /tmp/flamepy-${PYTHON_VERSION}-dist
 cd -
@@ -242,114 +250,55 @@ Release Docker images as multi-arch manifest tags for `linux/amd64` and
 Do not move `latest` for release candidates. For stable releases, move `latest`
 only after the versioned tag has been pushed and verified.
 
-Use either Podman or Docker Buildx. Both paths must publish a multi-arch tag
-that contains `linux/amd64` and `linux/arm64`.
+Build release images with manifest lists. The Makefile detects a
+Docker-compatible `CONTAINER_CLI` from the host, preferring a usable Docker
+daemon and falling back to Podman when Docker is unavailable. Set
+`CONTAINER_CLI=docker` or `CONTAINER_CLI=podman` when you need to override that
+choice. The selected CLI must support `build --manifest` and `manifest inspect/push`
+for the release image targets.
 
-Podman prerequisites:
+Set `RUST_BUILDER_IMAGE` to the Rust builder image used by the release
+Dockerfiles. Do not use `rust:latest` for release validation because it can drift
+from the image build inputs.
 
-```shell
-podman info
-podman login --get-login docker.io || podman login docker.io
-```
-
-With Podman, build both platforms into each manifest:
-
-```shell
-podman build --platform linux/amd64 \
-  --manifest "${IMAGE_REGISTRY}/flame-session-manager:${DOCKER_TAG}" \
-  -f docker/Dockerfile.fsm .
-podman build --platform linux/arm64 \
-  --manifest "${IMAGE_REGISTRY}/flame-session-manager:${DOCKER_TAG}" \
-  -f docker/Dockerfile.fsm .
-
-podman build --platform linux/amd64 \
-  --manifest "${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_TAG}" \
-  -f docker/Dockerfile.foc .
-podman build --platform linux/arm64 \
-  --manifest "${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_TAG}" \
-  -f docker/Dockerfile.foc .
-
-podman build --platform linux/amd64 \
-  --manifest "${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}" \
-  -f docker/Dockerfile.fem .
-podman build --platform linux/arm64 \
-  --manifest "${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}" \
-  -f docker/Dockerfile.fem .
-
-podman build --platform linux/amd64 \
-  --manifest "${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}" \
-  -f docker/Dockerfile.console .
-podman build --platform linux/arm64 \
-  --manifest "${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}" \
-  -f docker/Dockerfile.console .
-```
-
-Inspect local Podman manifests before pushing:
+Container CLI prerequisites:
 
 ```shell
-podman manifest inspect "${IMAGE_REGISTRY}/flame-session-manager:${DOCKER_TAG}"
-podman manifest inspect "${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_TAG}"
-podman manifest inspect "${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}"
-podman manifest inspect "${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}"
+make release-images-check-cli
 ```
 
-Push the Podman manifest lists:
+If the amd64 Rust smoke test fails under emulation, do not publish a stable
+arm64-only tag by default. Use a Podman farm or remote Podman connection with a
+native amd64 builder, or document the Docker release as blocked. If the release
+owner explicitly narrows the Docker scope to an arm64-first publish, push only
+the versioned arm64 tags, leave `latest` untouched, and record the missing
+amd64/multi-arch artifacts as a release gap. Set
+`RELEASE_IMAGE_PLATFORMS=linux/arm64` before running the image Make targets for
+that scoped build.
+
+Build both platforms into local manifests, inspect them, and push the manifest
+lists:
 
 ```shell
-podman manifest push "${IMAGE_REGISTRY}/flame-session-manager:${DOCKER_TAG}" \
-  "docker://${IMAGE_REGISTRY}/flame-session-manager:${DOCKER_TAG}"
-podman manifest push "${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_TAG}" \
-  "docker://${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_TAG}"
-podman manifest push "${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}" \
-  "docker://${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}"
-podman manifest push "${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}" \
-  "docker://${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}"
+make release-images
 ```
 
-Docker Buildx prerequisites:
+To split the image path into smaller steps, run:
 
 ```shell
-docker info
-docker login docker.io
-docker buildx ls
+make release-images-build
+make release-images-inspect
+make release-images-push
 ```
 
-With Docker Buildx, build and push both platforms directly:
+Verify the registry exposes every platform listed in `RELEASE_IMAGE_PLATFORMS`
+for all four images:
 
 ```shell
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t "${IMAGE_REGISTRY}/flame-session-manager:${DOCKER_TAG}" \
-  -f docker/Dockerfile.fsm --push .
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t "${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_TAG}" \
-  -f docker/Dockerfile.foc --push .
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t "${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}" \
-  -f docker/Dockerfile.fem --push .
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t "${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}" \
-  -f docker/Dockerfile.console --push .
+make release-images-verify
 ```
 
-Verify the registry exposes both architectures with Podman:
-
-```shell
-podman manifest inspect "docker://${IMAGE_REGISTRY}/flame-session-manager:${DOCKER_TAG}"
-podman manifest inspect "docker://${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_TAG}"
-podman manifest inspect "docker://${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}"
-podman manifest inspect "docker://${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}"
-```
-
-Verify the registry exposes both architectures with Docker:
-
-```shell
-docker buildx imagetools inspect "${IMAGE_REGISTRY}/flame-session-manager:${DOCKER_TAG}"
-docker buildx imagetools inspect "${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_TAG}"
-docker buildx imagetools inspect "${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}"
-docker buildx imagetools inspect "${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}"
-```
-
-After the Docker tags and PyPI package are published, run the Docker Compose
+After the image tags and PyPI package are published, run the Docker Compose
 release smoke check. It pulls the target image tag, starts a compose cluster, and
 runs `python -m flamepy.runner.e2e --tasks 1 --json` from a clean Python image
 that installs `flamepy==${PYTHON_VERSION}` from PyPI instead of using the SDK
@@ -366,19 +315,34 @@ make release-sanity
 Set `RELEASE_SANITY_COMPOSE_DOWN=0` only when you need to inspect the compose
 cluster after a failed run.
 
+The compose smoke uses the TLS settings in `ci/flame-cluster.yaml` and
+`ci/flame.yaml`. If `ci/certs` does not already contain release-test
+certificates, generate them before running the compose sanity check:
+
+```shell
+ci/generate-certs.sh --output ci/certs \
+  --san-list localhost,127.0.0.1,flame-session-manager,flame-object-cache \
+  --ip-range 172.20.0.0/24
+```
+
+For an explicitly scoped arm64-first Docker release, keep the compose smoke
+versioned-tag-only and set the expected platform list:
+
+```shell
+RELEASE_SANITY_EXPECTED_PLATFORMS=linux/arm64 \
+RELEASE_SANITY_LOCAL_CHECKS=0 \
+RELEASE_SANITY_PACKAGE_CHECKS=0 \
+RELEASE_SANITY_REMOTE_CHECKS=1 \
+RELEASE_SANITY_COMPOSE_E2E=1 \
+make release-sanity
+```
+
 If Docker Hub times out while pulling base images, retry the base image pull for
 the affected platform before rebuilding. Use the matching tool for the selected
 build path:
 
 ```shell
-podman pull --platform linux/amd64 docker.io/library/rust:1.95
-podman pull --platform linux/arm64 docker.io/library/rust:1.95
-podman pull --platform linux/amd64 docker.io/library/ubuntu:24.04
-podman pull --platform linux/arm64 docker.io/library/ubuntu:24.04
-docker pull --platform linux/amd64 docker.io/library/rust:1.95
-docker pull --platform linux/arm64 docker.io/library/rust:1.95
-docker pull --platform linux/amd64 docker.io/library/ubuntu:24.04
-docker pull --platform linux/arm64 docker.io/library/ubuntu:24.04
+make release-images-pull-bases
 ```
 
 ## Kubernetes And Helm Verification
