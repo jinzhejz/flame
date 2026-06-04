@@ -162,6 +162,13 @@ bash -n ci/k8s/e2e.sh
 python3 -m json.tool charts/flame/values.schema.json
 ```
 
+The non-publishing release sanity script wraps the metadata, local, package, and
+optional artifact checks:
+
+```shell
+make release-sanity
+```
+
 If `helm` and a local Kubernetes backend are available, also run:
 
 ```shell
@@ -341,6 +348,23 @@ docker buildx imagetools inspect "${IMAGE_REGISTRY}/flame-object-cache:${DOCKER_
 docker buildx imagetools inspect "${IMAGE_REGISTRY}/flame-executor-manager:${DOCKER_TAG}"
 docker buildx imagetools inspect "${IMAGE_REGISTRY}/flame-console:${DOCKER_TAG}"
 ```
+
+After the Docker tags and PyPI package are published, run the Docker Compose
+release smoke check. It pulls the target image tag, starts a compose cluster, and
+runs `python -m flamepy.runner.e2e --tasks 1 --json` from a clean Python image
+that installs `flamepy==${PYTHON_VERSION}` from PyPI instead of using the SDK
+preinstalled in Flame images:
+
+```shell
+RELEASE_SANITY_LOCAL_CHECKS=0 \
+RELEASE_SANITY_PACKAGE_CHECKS=0 \
+RELEASE_SANITY_REMOTE_CHECKS=1 \
+RELEASE_SANITY_COMPOSE_E2E=1 \
+make release-sanity
+```
+
+Set `RELEASE_SANITY_COMPOSE_DOWN=0` only when you need to inspect the compose
+cluster after a failed run.
 
 If Docker Hub times out while pulling base images, retry the base image pull for
 the affected platform before rebuilding. Use the matching tool for the selected

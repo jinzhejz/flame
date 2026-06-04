@@ -30,7 +30,7 @@ E2E_SYSTEM_PROFILE ?= all
 E2E_SYSTEM_PYTEST_ARGS ?=
 
 # Default target
-.PHONY: help build build-release docker-build docker-push docker-release docker-clean update_protos init sdk-go-build sdk-go-test sdk-go-clean e2e e2e-py e2e-py-docker e2e-py-local e2e-py-system-docker e2e-py-system-local e2e-py-system-stress e2e-py-system-longevity e2e-py-system-runner e2e-local e2e-rs format format-rust format-python install install-dev uninstall uninstall-dev start-services stop-services
+.PHONY: help build build-release docker-build docker-push docker-release docker-clean release-sanity update_protos init sdk-go-build sdk-go-test sdk-go-clean e2e e2e-py e2e-py-docker e2e-py-local e2e-py-system-docker e2e-py-system-local e2e-py-system-stress e2e-py-system-longevity e2e-py-system-runner e2e-local e2e-rs format format-rust format-python install install-dev uninstall uninstall-dev start-services stop-services
 
 help: ## Show this help message
 	@echo "Available targets:"
@@ -167,6 +167,9 @@ docker-push: docker-push-fsm docker-push-fem docker-push-console ## Push all Doc
 
 # Release targets
 docker-release: init docker-build docker-push ## Build and push all images for release
+
+release-sanity: ## Run non-publishing release sanity checks
+	ci/release/sanity.sh
 
 ci-image: update_protos ## Build images for CI (without version tags)
 	$(CONTAINER_RUNTIME) build -t $(FSM_IMAGE) -f $(FSM_DOCKERFILE) .
